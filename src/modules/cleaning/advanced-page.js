@@ -7,7 +7,7 @@
  * in Settings (progress / default tasks) — rooms and devices are never written from here.
  */
 import { h } from '../../core/utils/dom.js';
-import { t } from '../../core/i18n/i18n.js';
+import { t, formatNumber } from '../../core/i18n/i18n.js';
 import { banner, errorText } from '../../ui/components/common.js';
 import { toast } from '../../ui/components/toast.js';
 import { formDialog } from '../expenses/dialogs.js';
@@ -22,7 +22,7 @@ import { createTemplateViews } from './advanced-templates.js';
 import { completableItems, progressResetPlan, restoreDefaultsPlan } from './cleaning-ops.js';
 import { takeCleaningFocus } from './cleaning-focus.js';
 import { openTaskForm as openSharedTaskForm } from './task-form.js';
-import { settingsOf, validateSettings, routineDate, buildRoutinePlan, routineItems, routineProgress, quickPick, computeStats, DEFAULT_MINUTES, SETTINGS_LIMITS } from './cleaning-advanced.js';
+import { settingsOf, validateSettings, routineDate, buildRoutinePlan, routineView, routineSummary, quickPick, computeStats, DEFAULT_MINUTES, SETTINGS_LIMITS } from './cleaning-advanced.js';
 
 const TABS = ['routine', 'quick', 'rooms', 'devices', 'tasks', 'templates', 'import', 'stats', 'settings'];   // 5.4b: + devices; 5.4c: + templates, import; V6.3: + tasks
 const amsg = (e) => (e && e.detail && /^cleaning\./.test(String(e.detail).split(',')[0]) ? t(String(e.detail).split(',')[0]) : errorText(e));
@@ -169,24 +169,25 @@ export function mountAdvanced(outlet, ctx, opts = {}) {
         store.createRoutine(d, plan, s).catch((e) => { creating = null; toast(amsg(e), { tone: 'error' }); });
       }
     }
-    const items = routineItems({ plan, tasks: snap.tasks, occurrences: snap.occurrences, isVisible: visible });
-    const prog = routineProgress(items);
-    const planned = new Set(plan);
-    // V6.3: the routine is now the main Cleaning view, so tasks that became due after the plan was saved are
-    // SHOWN here (own sub-list) instead of pointing to the removed Main page. Mark All covers exactly what is shown.
-    const extraItems = [...board.today, ...board.overdue].filter((it) => !planned.has(it.occId || `${it.task.id}_${it.date.replace(/-/g, '')}`));   // done ones stay visible (who did it, Reopen)
+    // V6.4: obsolete plan keys (reset / archived / removed) are not current work — see routineView.
+    const view = routineView({ plan, tasks: snap.tasks, occurrences: snap.occurrences, board, isVisible: visible });
+    const items = view.items;
+    const extraItems = view.extras;   // done ones stay visible (who did it, Reopen)
     const extra = extraItems.length;
-    const shown = [...items, ...extraItems];
-    const pct = prog.total ? Math.round((prog.done / prog.total) * 100) : 0;
-    return h('div', { id: 'cl-adv-routine' },
+    const shown = view.shown;
+    // V6.4.0-a review: text, bar and empty state all come from ONE summary over exactly what is shown.
+    const sum = routineSummary(view); const pct = sum.pct;
+    const progText = sum.kind === 'progress' ? t('cleaning.adv.routineProgress', { done: sum.done, total: sum.total })
+      : sum.kind === 'settled' ? t('cleaning.adv.routineSettled', { skipped: sum.skipped, postponed: sum.postponed }) : t('cleaning.nothingToday');
+    return h('div', { id: 'cl-adv-routine', dataset: { summary: sum.kind } },
       h('div', { class: 'cl-progress', role: 'status', 'aria-live': 'polite' },
-        h('p', { class: 'cl-progress__text', id: 'cl-adv-progress' }, prog.total ? t('cleaning.adv.routineProgress', { done: prog.done, total: prog.total }) : t('cleaning.nothingToday')),
-        h('div', { class: 'cl-progress__bar', role: 'progressbar', 'aria-valuemin': '0', 'aria-valuemax': '100', 'aria-valuenow': String(pct) }, h('span', { style: `width:${pct}%` }))),
+        h('p', { class: 'cl-progress__text', id: 'cl-adv-progress', dataset: { done: String(sum.done), total: String(sum.total) } }, progText),
+        h('div', { class: 'cl-progress__bar', role: 'progressbar', 'aria-valuemin': '0', 'aria-valuemax': '100', 'aria-valuenow': String(pct), 'aria-valuetext': progText }, h('span', { style: `width:${pct}%` }))),
       snap.routine ? null : h('p', { class: 'field__hint', id: 'cl-adv-unsaved' }, t(canSave ? 'cleaning.adv.saving' : 'cleaning.adv.preview')),
       shown.length ? markAllBar('routine', shown, t('cleaning.bulk.scopeRoutine')) : null,
-      items.length ? h('ul', { class: 'cl-list', id: 'cl-adv-list' }, items.map((it) => (it.task && it.state !== 'inactive' ? row(it.task, it.date, it.occ, undefined, exOf(it))
-        : h('li', { class: 'cl-item cl-item--archived', dataset: { status: 'inactive' } }, h('p', { class: 'cl-item__meta' }, t('cleaning.adv.inactive'))))))
-        : h('p', { class: 'empty', id: 'cl-adv-empty' }, t('cleaning.nothingToday')),
+      items.length ? h('ul', { class: 'cl-list', id: 'cl-adv-list' }, items.map((it) => row(it.task, it.date, it.occ, undefined, exOf(it))))
+        : sum.kind === 'empty' ? h('p', { class: 'empty', id: 'cl-adv-empty' }, t('cleaning.nothingToday')) : null,
+      view.obsolete.length ? h('p', { class: 'field__hint cl-adv-obsolete', id: 'cl-adv-obsolete', dataset: { n: String(view.obsolete.length) } }, t('cleaning.adv.obsolete', { n: view.obsolete.length })) : null,
       extra ? h('section', { class: 'cl-adv-extra', id: 'cl-adv-extra', 'aria-labelledby': 'cl-adv-extra-title' },
         h('h3', { class: 'cl-adv-extra__title', id: 'cl-adv-extra-title' }, t('cleaning.adv.notInPlan', { n: extra })),
         h('ul', { class: 'cl-list', id: 'cl-adv-extra-list' }, extraItems.map((it) => row(it.task, it.date, it.occ, undefined, exOf(it), it.usesSince || 0)))) : null,
@@ -329,13 +330,23 @@ export function mountAdvanced(outlet, ctx, opts = {}) {
   function statsTab(snap) {
     if (!stats && !statsBusy) loadStats();
     const box = (k, v) => h('div', { class: 'fin-stat' }, h('span', { class: 'fin-stat__label' }, t(`cleaning.adv.stat.${k}`)), h('span', { class: 'fin-stat__value', id: `cl-adv-stat-${k}` }, String(v)));
-    const top = (obj, label) => Object.entries(obj).sort((a, b) => b[1] - a[1]).slice(0, 8).map(([k, v]) => h('li', null, `${label(k)} — ${v}`));
-    return h('div', { id: 'cl-adv-stats' },
+    // V6.4: same ranking (top 8, highest first) — now as wrapped rows (name · relative bar · count) so long
+    // names never collide with the number; an empty list says so instead of leaving a bare heading.
+    const top = (obj, label) => { const rows = Object.entries(obj).sort((a, b) => b[1] - a[1]).slice(0, 8); const max = rows.length ? rows[0][1] : 0;
+      return rows.map(([k, v]) => h('li', { class: 'cl-stat-row', dataset: { key: k } },
+        h('span', { class: 'cl-stat-row__name', dir: 'auto' }, label(k)),
+        h('span', { class: 'cl-stat-row__value' }, formatNumber(v)),
+        h('span', { class: 'cl-stat-row__bar', 'aria-hidden': 'true' }, h('span', { style: `inline-size:${max > 0 ? Math.max(4, Math.round((v / max) * 100)) : 0}%` })))); };
+    const group = (id, title, list) => h('section', { class: 'cl-stat-group', 'aria-labelledby': `${id}-title` },
+      h('h3', { class: 'cl-stat-group__title', id: `${id}-title` }, title),
+      list.length ? h('ul', { class: 'cl-stat-list', id }, list) : h('p', { class: 'empty cl-stat-empty', id }, t('cleaning.adv.statsNone')));
+    return h('div', { id: 'cl-adv-stats', class: 'cl-stats' },
       h('div', { class: 'cl-chips' }, [7, 30].map((n) => h('button', { type: 'button', class: `btn btn--sm ${n === statsDays ? 'btn--primary' : 'btn--secondary'}`, 'data-days': n, onClick: () => { statsDays = n; stats = null; render(); } }, t('cleaning.adv.lastDays', { n })))),
-      !stats ? h('p', { class: 'muted', role: 'status' }, t('common.loading')) : stats.error ? banner('error', stats.error) : h('div', null,
-        h('div', { class: 'fin-stats' }, box('completions', stats.completions), box('minutes', stats.minutes), box('skips', stats.skips), box('postpones', stats.postpones), box('reopens', stats.reopens)),
-        h('h3', { class: 'cl-setup__title' }, t('cleaning.adv.byMember')), h('ul', { class: 'cl-stat-list', id: 'cl-adv-by-member' }, top(stats.byMember, nameOf)),
-        h('h3', { class: 'cl-setup__title' }, t('cleaning.adv.byRoom')), h('ul', { class: 'cl-stat-list', id: 'cl-adv-by-room' }, top(stats.byRoom, (r) => (r === 'none' ? t('cleaning.noRoom') : roomLabel(r))))));
+      !stats ? h('p', { class: 'muted', role: 'status' }, t('common.loading')) : stats.error ? banner('error', stats.error) : h('div', { class: 'cl-stats__body' },
+        h('div', { class: 'fin-stats cl-stats__grid' }, box('completions', stats.completions), box('minutes', stats.minutes), box('skips', stats.skips), box('postpones', stats.postpones), box('reopens', stats.reopens)),
+        h('div', { class: 'cl-stat-groups' },
+          group('cl-adv-by-member', t('cleaning.adv.byMember'), top(stats.byMember, nameOf)),
+          group('cl-adv-by-room', t('cleaning.adv.byRoom'), top(stats.byRoom, (r) => (r === 'none' ? t('cleaning.noRoom') : roomLabel(r)))))));
   }
   async function loadStats() {
     statsBusy = true;

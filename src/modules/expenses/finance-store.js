@@ -19,6 +19,7 @@ import { buildBudgetEdit } from './budget-edit.js';
 import { addDays } from './calendar.js';
 import { parseMinor, minorToPlain } from './money.js';
 import * as v6 from './finance-v6.js';
+import { monthBudget } from './finance-monthly.js';
 import { planCorrection, removalCheck, restoreCheck, adjustmentHistory } from './wallet-admin.js';
 
 const NAMES = [COL.wallets, COL.expenses, COL.movements, COL.cycles, COL.commitments, COL.adjustments];
@@ -168,7 +169,7 @@ export function createFinanceStore({ homeId, uid, repo, homeCurrency = 'EGP' }) 
         .map((c) => ({ id: c.id, walletId: c.walletId, currency: c.currency, endDate: c.endDate, ...cycleStats(c, s, today) }));
       const next = upcoming(s.commitments, today, 60)[0] || null;
       return Object.freeze({ month, monthTotalMinor: t.totalMinor, monthFixedMinor: t.fixedMinor, monthVariableMinor: t.variableMinor,
-        currency: homeCurrency, activeCycles: isV6() ? [] : cyc, nextCommitment: next && { name: next.name, nextDueDate: next.nextDueDate, amountMinor: next.amountMinor, currency: next.currency },
+        currency: homeCurrency, monthBudget: monthBudget(s, month), activeCycles: isV6() ? [] : cyc, nextCommitment: next && { name: next.name, nextDueDate: next.nextDueDate, amountMinor: next.amountMinor, currency: next.currency },
         v6: (() => { const p = v6.periodFor(periods, today); return p ? { ...v6.budgetStatus(p, s), endDateExclusive: p.endDateExclusive } : null; })() });
     },
 

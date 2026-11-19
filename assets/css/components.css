@@ -262,3 +262,8 @@ textarea.input { font: inherit; }
 .rm-item--unread .cl-item__title { font-weight: 800; }
 .rm-item--read { opacity: 0.85; }
 .rm-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 0.6rem; flex-wrap: wrap; }
+
+/* V6.4: live active counts inside the Your Home card (Rooms / Devices). */
+.facts__count { font-weight: 700; }
+.facts__note { display: block; font-size: 0.78rem; font-weight: 600; color: var(--warn); }
+.facts__note:empty { display: none; }

@@ -3,7 +3,7 @@
  */
 export const APP = Object.freeze({
   name: 'HomeHub',
-  version: '6.3.0.1',
+  version: '6.4.0-a',
   phase: '4A',
   /** Version of the document shapes written by this code (users, homes, settings). */
   schemaVersion: 1,

@@ -165,3 +165,21 @@
 .qa__row select#qa-wallet { min-inline-size: 7rem; }
 .fm-td-name .fin-row__sub { display: block; }
 .fin-wallet .fin-adj { grid-column: 1 / -1; margin: 0; }
+
+/* V6.4 Dashboard finance tile: monthly budget usage bar (fill clamped 0–100 %, logical inline-size). */
+.summary-card--finance .summary-card__value.is-negative { color: var(--danger); }
+.fin-budget-bar { display: block; inline-size: 100%; min-inline-size: 8rem; block-size: 0.5rem; margin-block: 0.3rem 0.1rem; border-radius: 999px; background: var(--surface-2, color-mix(in srgb, var(--text) 10%, transparent)); overflow: hidden; }
+.fin-budget-bar__fill { display: block; block-size: 100%; border-radius: inherit; background: var(--acc); transition: inline-size 0.3s var(--ease); }
+.fin-budget-bar.is-over .fin-budget-bar__fill { background: var(--danger); }
+.fin-budget-pct.is-over { color: var(--danger); font-weight: 700; }
+.summary-card--finance .summary-card__body { inline-size: 100%; }
+
+/* V6.4: rows with MORE than three parts (text + status tag + amount/action). The 3-column .fin-row grid
+   squeezed the tag into a zero-minimum column, so it overlapped the amount / button on narrow screens.
+   Here every part keeps its own box and wraps onto the next line instead (logical properties, RTL-safe). */
+.fin-row--wrap { display: flex; flex-wrap: wrap; align-items: center; gap: 0.45rem 0.75rem; }
+.fin-row--wrap > .fin-row__main { flex: 1 1 12rem; min-inline-size: 0; }
+.fin-row--wrap > .fin-row__main .fin-row__note { white-space: normal; overflow-wrap: anywhere; }
+.fin-row--wrap > .pill { flex: 0 1 auto; max-inline-size: 100%; white-space: normal; overflow-wrap: anywhere; text-align: center; line-height: 1.3; }
+.fin-row--wrap > .fin-row__amount { margin-inline-start: auto; }
+.fin-row--wrap > .btn { flex: 0 0 auto; }

@@ -97,14 +97,22 @@
 @media (min-width: 1024px) { .content { padding: 2rem 2rem 3rem; } }
 
 /* Bottom dock — phones and tablets (glass dock). */
+/* V6.4: one horizontally scrollable row (no "More"). Items keep their size; centred when they fit
+   (auto margins on the ends), scroll when they don't. Safe-area insets on all sides in standalone PWA. */
 .dock {
-  position: fixed; inset-inline: 0; bottom: 0; z-index: 50; display: flex; justify-content: space-around;
-  padding: 0.4rem 0.5rem calc(0.4rem + var(--safe-bottom));
+  position: fixed; inset-inline: 0; bottom: 0; z-index: 50; display: flex; justify-content: flex-start; gap: 0.15rem;
+  max-inline-size: 100vw; overflow-x: auto; overflow-y: hidden; overscroll-behavior-x: contain; -webkit-overflow-scrolling: touch;
+  scroll-snap-type: x proximity; scroll-padding-inline: 0.5rem; scrollbar-width: none;
+  padding: 0.4rem max(0.5rem, env(safe-area-inset-right, 0px)) calc(0.4rem + var(--safe-bottom)) max(0.5rem, env(safe-area-inset-left, 0px));
   background: color-mix(in srgb, var(--surface) 90%, transparent); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
   border-top: 1px solid var(--border);
 }
 @media (min-width: 1024px) { .dock { display: none; } }
-.nav-link--dock { flex-direction: column; justify-content: center; gap: 0.15rem; min-width: 64px; min-height: 52px; padding: 0.3rem 0.6rem; }
+.dock::-webkit-scrollbar { display: none; }
+.dock > :first-child { margin-inline-start: auto; }
+.dock > :last-child { margin-inline-end: auto; }
+.nav-link--dock { flex: 0 0 auto; scroll-snap-align: center; flex-direction: column; justify-content: center; gap: 0.15rem; min-width: 64px; min-height: 52px; padding: 0.3rem 0.6rem; white-space: nowrap; }
+.nav-link--dock:focus-visible { outline: 2px solid var(--primary, var(--acc)); outline-offset: -2px; }
 .nav-link__label { font-size: 0.68rem; font-weight: 700; }
 
 /* ---- pages ------------------------------------------------------------------------ */
@@ -172,3 +180,8 @@
 .gate__error-mark--info { background: var(--info-soft); color: var(--link); }
 .legacy-points { display: grid; gap: 0.4rem; margin: 0; padding-inline-start: 1.25rem; text-align: start; list-style: disc; font-size: 0.9rem; color: var(--text-2); }
 .legacy-points li::marker { color: var(--link); }
+/* V6.4: when the dock row overflows, fade both inline edges so a partly hidden item signals "scroll". */
+.dock--scroll {
+  -webkit-mask-image: linear-gradient(to right, transparent 0, #000 1.25rem, #000 calc(100% - 1.25rem), transparent 100%);
+  mask-image: linear-gradient(to right, transparent 0, #000 1.25rem, #000 calc(100% - 1.25rem), transparent 100%);
+}

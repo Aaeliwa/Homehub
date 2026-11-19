@@ -50,6 +50,12 @@ export function mountDashboard(outlet, ctx) {
     h('div', null, h('dt', null, t('settings.currency')), h('dd', null, home.currency)),
     h('div', null, h('dt', null, t('settings.timezone')), h('dd', { dir: 'ltr' }, home.timezone)),
     homeSettings ? h('div', null, h('dt', null, t('settings.weekStartsOn')), h('dd', null, weekdayName(homeSettings.weekStartsOn))) : null);
+  // V6.4: active Rooms / Devices counts live here (their standalone dashboard tiles were removed).
+  const countSlots = ctx.registry.homeCountsFor ? ctx.registry.homeCountsFor(permissions).map((m) => {
+    const dd = h('dd', null, '…');
+    facts.appendChild(h('div', { class: 'facts__row--count', dataset: { module: m.id } }, h('dt', null, t(m.nameKey)), dd));
+    return { m, dd };
+  }) : [];
 
   const tools = ctx.registry.visibleFor(permissions);
   const widgets = ctx.registry.widgetsFor(permissions);
@@ -78,7 +84,13 @@ export function mountDashboard(outlet, ctx) {
           h('h2', { class: 'card__title', id: 'tools-title' }, t('dashboard.tools')),
           h('p', { class: 'card__hint' }, t('dashboard.toolsHint'))),
         tools.length
-          ? h('div', { class: 'tile-grid' }, tools.map(moduleTile))
+          ? h('div', { class: 'tile-grid' }, tools.map(moduleTile),
+            // V6.4: Reminders keeps a Tools entry now that its dashboard tile is gone (same audience as the bell).
+            permissions.can('cleaning.view') || permissions.can('maintenance.view')
+              ? h('a', { href: '#/reminders', class: 'tile accent-amber', id: 'tool-reminders' },
+                h('span', { class: 'tile__icon', 'aria-hidden': 'true' }, '🔔'),
+                h('span', { class: 'tile__text' }, h('span', { class: 'tile__name' }, t('reminders.title')), h('span', { class: 'tile__desc' }, t('reminders.sub'))))
+              : null)
           : h('p', { class: 'empty' }, t('dashboard.noTools')))));
 
   outlet.replaceChildren(page);
@@ -101,14 +113,12 @@ export function mountDashboard(outlet, ctx) {
       .then((mod) => { if (alive) { const off = mod.mount(slot, ctx); if (typeof off === 'function') unmounts.push(off); } })
       .catch((err) => { log.error(`Widget ${m.id} failed`, err); slot.remove(); });
   }
-  // Phase 5.6: in-app Reminders card (Cleaning or Maintenance viewers only). Loaded lazily — the
-  // dashboard never statically reaches Firebase-backed code.
-  if (permissions.can('cleaning.view') || permissions.can('maintenance.view')) {
-    const slot = h('div', { class: ['widget', 'widget--sm'] });
-    widgetGrid.appendChild(slot);
-    import('../reminders/widget.js')
-      .then((mod) => { if (alive) { const off = mod.mount(slot, ctx); if (typeof off === 'function') unmounts.push(off); } })
-      .catch((err) => { log.warn('Reminders card unavailable', err && err.code); slot.remove(); });
+  // V6.4: the Reminders dashboard tile was removed. Reminders stay available via the bell (with its
+  // badge), the Reminders page and the Tools entry; notifications are unchanged.
+  for (const { m, dd } of countSlots) {
+    m.homeCount.load()
+      .then((mod) => { if (alive) { const off = mod.mountCount(dd, ctx); if (typeof off === 'function') unmounts.push(off); } })
+      .catch((err) => { log.warn(`Home count ${m.id} unavailable`, err && err.code); dd.textContent = '—'; });
   }
 
   return {

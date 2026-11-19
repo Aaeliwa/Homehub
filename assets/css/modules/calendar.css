@@ -56,3 +56,8 @@
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .cal-t-blue { color: #93c5fd; } :root:not([data-theme="light"]) .cal-t-purple { color: #c4b5fd; } }
 .cal-legend__shift .cal-ico { color: currentColor; }
 .cal-imp-shift { display: inline-flex; align-items: center; gap: 3px; inline-size: fit-content; margin-block: 2px; }
+/* V6.4: compact Calendar settings gear beside the header actions; header actions wrap without overlap. */
+.cal-head__actions { flex-wrap: wrap; align-items: center; }
+.cal-gear { flex: 0 0 auto; inline-size: 44px; block-size: 44px; }
+.cal-gear[aria-pressed='true'] { background: var(--info-soft); color: var(--link); border-color: color-mix(in srgb, var(--link) 40%, var(--border)); }
+.cal-gear:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; }

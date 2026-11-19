@@ -25,5 +25,6 @@ export default defineModule({
     { id: 'rooms.restore', defaultRoles: ['admin'] },
   ],
   page: () => import('./page.js'),
-  dashboardWidget: { order: 10, size: 'sm', load: () => import('./widget.js') },
+  // V6.4: no standalone dashboard tile — the ACTIVE room count lives in the Your Home card.
+  homeCount: { order: 10, load: () => import('./widget.js') },
 });

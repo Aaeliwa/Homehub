@@ -177,7 +177,6 @@ export function mountSettings(outlet, ctx) {
           h('div', { class: 'list__meta' },
             h('span', { class: 'pill pill--role' }, roleLabel({ id: m.roleId, name: m.roleId })),
             m.status !== 'active' ? h('span', { class: 'pill pill--warn' }, t(`status.${m.status}`)) : null))));
-      membersList.appendChild(h('p', { class: 'muted-note' }, t('settings.invitesLater')));
     }).catch((err) => { if (alive) membersList.replaceChildren(banner('error', errorText(err))); });
   }
 

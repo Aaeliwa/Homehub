@@ -37,6 +37,7 @@ test('V6.2: twelve modules registered; the implemented ones enabled (+ calendar)
     assert.equal(m.enabled, true, id);
     assert.equal(typeof m.page, 'function');
     if (id === 'savings') assert.equal(m.dashboardWidget, null, 'V6.1: Life Savings has no dashboard tile (feature kept)');
+    else if (id === 'rooms' || id === 'devices') { assert.equal(m.dashboardWidget, null, 'V6.4: no standalone tile'); assert.equal(typeof m.homeCount.load, 'function', 'V6.4: active count in the Your Home card'); }
     else assert.equal(typeof m.dashboardWidget.load, 'function');
   }
   const others = registry.all().filter((m) => !ENABLED.includes(m.id));
@@ -45,7 +46,8 @@ test('V6.2: twelve modules registered; the implemented ones enabled (+ calendar)
   const owner = createPermissionSet(['*']);
   assert.equal(registry.visibleFor(owner).length, 12);   // V6.2: + calendar
   assert.deepEqual(registry.navigableFor(owner).map((m) => m.id), ['expenses', 'calendar', 'savings', 'chef', 'cleaning', 'maintenance', 'rooms', 'devices']);   // separate destinations (V6.2: + calendar)
-  assert.deepEqual(registry.widgetsFor(owner).map((m) => m.id), ['calendar', 'expenses', 'chef', 'rooms', 'cleaning', 'maintenance', 'devices']);   // widget order 3,5,8,10,15,17,20 (V6.2: calendar month first) (V6.1: timers panel; no Life Savings tile)
+  assert.deepEqual(registry.widgetsFor(owner).map((m) => m.id), ['calendar', 'expenses', 'chef', 'cleaning', 'maintenance']);   // widget order 3,5,8,15,17 (V6.2: calendar month first) (V6.1: timers panel; no Life Savings tile) (V6.4: Rooms / Devices tiles → Your Home counts)
+  assert.deepEqual(registry.homeCountsFor(owner).map((m) => m.id), ['rooms', 'devices']);
   assert.ok(registry.navigableFor(owner).some((m) => m.id === 'savings'), 'Life Savings still navigable');
 });
 

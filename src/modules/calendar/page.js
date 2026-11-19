@@ -14,6 +14,7 @@ import { formDialog } from '../expenses/dialogs.js';
 import { todayIn, formatMonth, formatDateShort, formatDateLong, addDays } from '../expenses/calendar.js';
 import { shiftMonth, weekOf, eventsOn, inRange, offDutyGaps, previewImport, TYPES, isLive, batchMembers, shiftOf } from './calendar-model.js';
 import { getCalendarStore } from './calendar-service.js';
+import { icon } from '../../ui/components/icons.js';
 import { grid, agenda, legend, eventForm, timeText, colorOf, shiftIcon, titleWithIcon, msg, weekdayLabels } from './calendar-ui.js';
 
 export function mount(outlet, ctx) {
@@ -28,10 +29,13 @@ export function mount(outlet, ctx) {
     const step = (n) => () => { if (view === 'week') { selected = addDays(selected, 7 * n); ym = selected.slice(0, 7); } else { ym = shiftMonth(ym, n); selected = `${ym}-01`; } render(); };
     return [h('header', { class: 'page-head page-head--row' },
         h('div', null, h('h1', { class: 'page-head__title' }, t('module.calendar.name')), h('p', { class: 'page-head__sub' }, t('calendar.sub'))),
-        h('div', { class: 'cl-item__actions' },
+        h('div', { class: 'cl-item__actions cal-head__actions' },
           can('calendar.create') ? h('button', { type: 'button', class: 'btn btn--primary', id: 'cal-new', onClick: () => eventForm({ store, container: root, preset: { startDate: selected } }) }, `＋ ${t('calendar.new')}`) : null,
           can('calendar.create') ? h('button', { type: 'button', class: 'btn btn--secondary', id: 'cal-import', onClick: () => { importState = { text: '', preview: null, fileName: null }; render(); } }, t('calendar.import.open')) : null,
-          h('button', { type: 'button', class: 'btn btn--ghost', id: 'cal-settings', 'aria-pressed': String(view === 'settings'), onClick: () => { view = view === 'settings' ? 'month' : 'settings'; render(); } }, `⚙ ${t('calendar.settings.title')}`))),
+          // V6.4: Calendar settings = compact, labelled gear icon (Calendar only; the app's main Settings is unchanged)
+          h('button', { type: 'button', class: 'icon-btn cal-gear', id: 'cal-settings', 'aria-pressed': String(view === 'settings'),
+            'aria-label': t('calendar.settings.gear'), title: t('calendar.settings.gear'),
+            onClick: () => { view = view === 'settings' ? 'month' : 'settings'; render(); } }, icon('settings', { size: 20 })))),
       h('div', { class: 'cal-toolbar' },
         h('button', { type: 'button', class: 'btn btn--ghost btn--sm', id: 'cal-prev', 'aria-label': t('calendar.prev'), onClick: step(-1) }, document.dir === 'rtl' ? '›' : '‹'),
         h('span', { class: 'cal-head__title', id: 'cal-label', 'aria-live': 'polite' }, view === 'week' ? `${formatDateShort(weekOf(selected)[0], getLocale())} – ${formatDateShort(weekOf(selected)[6], getLocale())}` : formatMonth(ym, getLocale())),
@@ -131,7 +135,7 @@ export function mount(outlet, ctx) {
   function settingsView(snap) {
     const rows = snap.batches.map((b) => {
       const members = batchMembers(snap.all, b.id); const live = members.filter(isLive).length;
-      return h('li', { class: 'fin-row cal-batch', dataset: { batch: b.id, status: b.status } },
+      return h('li', { class: 'fin-row fin-row--wrap cal-batch', dataset: { batch: b.id, status: b.status } },
         h('span', { class: 'fin-row__main', dir: 'auto' }, `📄 ${b.fileName}`,
           h('span', { class: 'fin-row__sub' }, [fmtTime(b.createdAt), t('calendar.batch.count', { n: b.createdCount || members.length }), t('calendar.batch.live', { n: live }),
             b.audience === 'private' ? `🔒 ${t('calendar.private')}` : null].filter(Boolean).join(' · '))),

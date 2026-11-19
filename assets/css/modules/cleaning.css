@@ -67,3 +67,17 @@
 /* V6.3: tasks due after the day's plan was saved (shown under the routine) */
 .cl-adv-extra { margin-top: var(--space-4, 1rem); }
 .cl-adv-extra__title { font-size: 0.95rem; font-weight: 700; margin: 0 0 var(--space-2, 0.5rem); color: var(--text-2); }
+
+/* V6.4: statistics — consistent spacing; ranked rows wrap long names (Arabic / English) without colliding
+   with the count; two columns on wide screens, one on phones. Logical properties only. */
+.cl-stats, .cl-stats__body { display: grid; gap: 1rem; }
+.cl-stat-groups { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(min(100%, 18rem), 1fr)); align-items: start; }
+.cl-stat-group { display: grid; gap: 0.5rem; padding: 0.9rem; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface); min-inline-size: 0; }
+.cl-stat-group__title { margin: 0; font-size: 0.95rem; font-weight: 800; }
+.cl-stat-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.55rem; }
+.cl-stat-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 0.2rem 0.75rem; }
+.cl-stat-row__name { min-inline-size: 0; overflow-wrap: anywhere; font-weight: 600; }
+.cl-stat-row__value { font-weight: 800; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.cl-stat-row__bar { grid-column: 1 / -1; display: block; block-size: 0.35rem; border-radius: 999px; background: var(--surface-2); overflow: hidden; }
+.cl-stat-row__bar > span { display: block; block-size: 100%; border-radius: inherit; background: var(--acc, var(--link)); }
+.cl-stat-empty { margin: 0; }

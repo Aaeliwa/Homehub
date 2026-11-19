@@ -23,5 +23,6 @@ export default defineModule({
     { id: 'devices.restore', defaultRoles: ['admin'] },
   ],
   page: () => import('./page.js'),
-  dashboardWidget: { order: 20, size: 'sm', load: () => import('./widget.js') },
+  // V6.4: no standalone dashboard tile — the ACTIVE device count lives in the Your Home card.
+  homeCount: { order: 20, load: () => import('./widget.js') },
 });

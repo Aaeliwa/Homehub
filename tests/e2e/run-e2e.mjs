@@ -46,6 +46,7 @@ const BASE = `http://127.0.0.1:${server.address().port}/`;
 const browser = await chromium.launch();
 const results = [];
 async function check(name, fn) {
+  if (process.env.E2E_ONLY && !new RegExp(process.env.E2E_ONLY).test(name)) return;   // local focus runs only; CI runs everything
   try { await fn(); results.push(['PASS', name]); console.log(`PASS  ${name}`); }
   catch (e) {
     try {
@@ -253,16 +254,16 @@ async function addRoom(name, type, floor) {
   await page.locator('.room-card__name', { hasText: name }).waitFor();
 }
 
-await check('R1 dashboard: Rooms summary widget says no rooms; Rooms in navigation', async () => {
+await check('R1 dashboard: Your Home card says no rooms (V6.4: no standalone Rooms tile); Rooms in navigation', async () => {
   await page.goto(BASE + '#/dashboard');
-  await page.locator('.summary-card[href="#/m/rooms"]').waitFor();
-  await page.locator('.summary-card[href="#/m/rooms"] .summary-card__label', { hasText: 'No rooms yet' }).waitFor();
+  await page.locator('#home-rooms-count', { hasText: 'No rooms yet' }).waitFor();
+  assert.equal(await page.locator('.summary-card[href="#/m/rooms"]').count(), 0, 'Rooms tile removed');
   assert.equal(await page.locator('.rail a[href="#/m/rooms"]').count(), 1);
   assert.equal(await page.locator('.dock a[href="#/m/rooms"]').count(), 1);
 });
 
 await check('R2 Rooms page: empty state with Add room and quick templates (nothing written)', async () => {
-  await page.click('.summary-card[href="#/m/rooms"]');
+  await page.click('#home-rooms-count');
   await page.locator('.empty-state__title', { hasText: 'No rooms yet' }).waitFor();
   assert.equal(await page.locator('.quick-rooms__btn').count(), 4);
   assert.deepEqual(await roomsPaths(), []);
@@ -384,9 +385,8 @@ await check('R11 dashboard widget reflects live counts (archive one → 2 active
   await page.click('dialog[open] .btn--danger');
   await page.waitForFunction(() => document.querySelectorAll('.room-card').length === 2);
   await page.goto(BASE + '#/dashboard');
-  await page.locator('.summary-card[href="#/m/rooms"] .summary-card__value', { hasText: '2' }).waitFor();
-  assert.match(await page.locator('.summary-card[href="#/m/rooms"]').innerText(), /active rooms/);
-  assert.match(await page.locator('.summary-card[href="#/m/rooms"]').innerText(), /1 archived/);
+  // V6.4: ACTIVE rooms only, in the Your Home card (archived never counted)
+  await page.locator('#home-rooms-count[data-count="2"]', { hasText: '2 active rooms' }).waitFor();
   await shot(page, '17-dashboard-rooms-widget-en-dark');
 });
 
@@ -396,14 +396,14 @@ await check('R12 one shared rooms listener across Dashboard ↔ Rooms navigation
   await page.goto(BASE + '#/m/rooms');
   await page.locator('.room-card').first().waitFor();
   await page.goto(BASE + '#/dashboard');
-  await page.locator('.summary-card[href="#/m/rooms"] .summary-card__value').waitFor();
+  await page.locator('#home-rooms-count[data-count]').waitFor();
   assert.equal(await page.evaluate((c) => window.__fake.listenerCount(c), col), 1);
 });
 
 await check('R13 Arabic RTL: translated types, plural count, dialog direction', async () => {
   await page.click('.topbar__actions .chip-btn:not(.chip-btn--icon)');      // -> Arabic
   await page.waitForFunction(() => document.documentElement.dir === 'rtl');
-  await page.locator('.summary-card[href="#/m/rooms"] .summary-card__label', { hasText: 'غرفة نشطة' }).waitFor();
+  await page.locator('#home-rooms-count', { hasText: /غرف(ة|تان) نشط/ }).waitFor();
   await page.goto(BASE + '#/m/rooms');
   await page.locator('.room-card').first().waitFor();
   assert.match(await page.locator('.page-head__sub').innerText(), /غرفتان/);
@@ -472,16 +472,17 @@ async function saveDialog() {
 const roomIdByName = async (n) => (await page.evaluate(() => Object.entries(window.__fake.dump()).filter(([p]) => /\/rooms\//.test(p))))
   .find(([, d]) => d.name === n)[0].split('/').pop();
 
-await check('D1 dashboard: Devices summary card (empty) + Devices in navigation; Rooms card intact', async () => {
+await check('D1 dashboard: Your Home card shows devices (empty) + Devices in navigation; Rooms count intact (V6.4: no tiles)', async () => {
   await page.goto(BASE + '#/dashboard');
-  await page.locator('.summary-card[href="#/m/devices"] .summary-card__label', { hasText: 'No devices yet' }).waitFor();
-  await page.locator('.summary-card[href="#/m/rooms"]').waitFor();
+  await page.locator('#home-devices-count', { hasText: 'No devices yet' }).waitFor();
+  await page.locator('#home-rooms-count[data-count]').waitFor();
+  assert.equal(await page.locator('.summary-card[href="#/m/devices"], .summary-card[href="#/m/rooms"]').count(), 0);
   assert.equal(await page.locator('.rail a[href="#/m/devices"]').count(), 1);
   assert.equal(await page.locator('.tile--planned').count(), 4, 'V6.1: 4 planned (Cleaning, Maintenance, Recipes implemented)');
 });
 
 await check('D2 Devices empty state with 6 templates; nothing written', async () => {
-  await page.click('.summary-card[href="#/m/devices"]');
+  await page.click('#home-devices-count');
   await page.locator('.empty-state__title', { hasText: 'No devices yet' }).waitFor();
   assert.equal(await page.locator('.quick-rooms__btn').count(), 6);
   assert.deepEqual(await devDocs(), []);
@@ -591,8 +592,8 @@ await check('D10 status → Needs attention; dashboard summary updates', async (
   await saveDialog();
   await page.locator('.device-card:has-text("Refrigerator") .status-pill--needs_attention').waitFor();
   await page.goto(BASE + '#/dashboard');
-  await page.locator('.summary-card[href="#/m/devices"] .summary-card__value', { hasText: '3' }).waitFor();
-  assert.match(await page.locator('.summary-card[href="#/m/devices"]').innerText(), /1 needs attention/);
+  await page.locator('#home-devices-count[data-count="3"]', { hasText: '3 active devices' }).waitFor();
+  await page.locator('#home-devices-attention', { hasText: '1 needs attention' }).waitFor();
   await shot(page, '25-dashboard-devices-widget-en-dark');
 });
 
@@ -1628,10 +1629,9 @@ await check('Navigation icons render in both the sidebar and the bottom dock', a
   await page.goto(BASE + '#/dashboard');
   await page.locator('.hero__home').waitFor();
   assert.equal(await page.locator('.rail .nav-link svg').count(), 2, 'dashboard + settings icons in sidebar');
-  // Phase 5.3: with more than 4 destinations the dock adds "More" (its own chevron icon).
-  const more = await page.locator('#dock-more-btn').count();
-  assert.equal(await page.locator('.dock .nav-link svg').count(), 2 + more, 'dashboard + settings (+ More) icons in dock');
-  assert.equal(await page.locator('.dock #dock-more-btn svg').count(), more, 'More has its own icon');
+  // V6.4: the dock is one scrollable row (no "More"): dashboard + settings use SVG icons, modules their glyphs.
+  assert.equal(await page.locator('#dock-more-btn').count(), 0, 'no More overflow');
+  assert.equal(await page.locator('.dock .nav-link svg').count(), 2, 'dashboard + settings icons in dock');
 });
 
 await check('Error: role document missing -> "Role not found"', async () => {
@@ -1739,12 +1739,13 @@ await check('T-UI rooms/devices → cleaning templates: card styling, review wit
   // Issue 1: the Cleaning card is the shared summary-card and renders like the Rooms card.
   // Dashboard cards load lazily: wait for BOTH cards before comparing their computed styles.
   await page.locator('#cl-widget.summary-card').waitFor();
-  await page.locator('a.summary-card[href="#/m/rooms"]').waitFor();
+  // V6.4: the Rooms tile is gone; compare with another shared summary-card that stays (Maintenance).
+  await page.locator('a.summary-card[href="#/m/maintenance"]').waitFor();
   const look = await page.evaluate(() => {
     const pick = (el) => { const c = getComputedStyle(el); return [c.display, c.paddingTop, c.borderRadius, c.borderTopWidth, getComputedStyle(el.querySelector('.summary-card__title')).fontSize]; };
-    return { clean: pick(document.querySelector('#cl-widget')), rooms: pick(document.querySelector('a.summary-card[href="#/m/rooms"]')) };
+    return { clean: pick(document.querySelector('#cl-widget')), other: pick(document.querySelector('a.summary-card[href="#/m/maintenance"]')) };
   });
-  assert.deepEqual(look.clean, look.rooms, 'same card layout/spacing/typography as Rooms');
+  assert.deepEqual(look.clean, look.other, 'same card layout/spacing/typography as the other summary cards');
   assert.equal(await page.locator('#cl-widget .summary-card__icon').count(), 1);
   // Review: existing rooms/devices recognised; frequencies shown; equivalent manual task covers one.
   await cleaningTasks(); await page.locator('#cl-setup').waitFor();
@@ -1872,7 +1873,9 @@ await check('RM-UI reminders: derived counts (bell + card); groups; read / snooz
   // 1. Bell + dashboard card — V6.2: 3 actionable (overdue plan, ONE "Pending cleaning tasks", open fault). Cleaning no longer
   //    reminds per task or for upcoming tasks; the resolved fault is not actionable.
   await page.waitForFunction(() => (document.querySelector('#reminders-bell .bell-btn__badge') || {}).textContent === '3');
-  await page.locator('#rm-widget .summary-card__value', { hasText: '3' }).waitFor();
+  // V6.4: no Reminders dashboard tile — the bell badge, the page and the Tools entry stay.
+  assert.equal(await page.locator('#rm-widget').count(), 0, 'Reminders tile removed');
+  await page.locator('#tool-reminders[href="#/reminders"]').waitFor();
   const before0 = await src();
   // Lightweight bell: on pages that don't already load Cleaning / Maintenance, no count and no listeners.
   await page.goto(BASE + '#/m/rooms'); await page.locator('#reminders-bell').waitFor();
@@ -1922,7 +1925,7 @@ await check('RM-UI reminders: derived counts (bell + card); groups; read / snooz
   assert.ok(await page.evaluate((h) => !!window.__fake.dump()[`homes/${h}/cleaningTasks/tSoon`], H), 'the task itself is untouched');
   // 7. No access: no bell, no card, page refuses.
   await logout(); await login('sara@example.com'); await page.locator('.hero__home').waitFor();
-  assert.equal(await page.locator('#reminders-bell').count(), 0); assert.equal(await page.locator('#rm-widget').count(), 0);
+  assert.equal(await page.locator('#reminders-bell').count(), 0); assert.equal(await page.locator('#rm-widget, #tool-reminders').count(), 0);
   await page.goto(BASE + '#/reminders'); await page.locator('.banner', { hasText: "don't have access to Cleaning or Maintenance" }).waitFor();
   await logout(); await login('owner@example.com'); await page.locator('.hero__home').waitFor();
   // 8. Arabic + mobile.
@@ -2479,9 +2482,9 @@ await check('C-UI cleaning: (V6.3) create via form → Today’s routine → no 
   await page.locator('#cl-adv-tab-routine', { hasText: 'روتين اليوم' }).waitFor();
   assert.ok((await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)) <= 0, 'no horizontal overflow');
   await shot(page, '47-cleaning-ar-mobile');
-  // Mobile dock: 5 destinations → "More" keeps Rooms reachable.
-  await page.click('#dock-more-btn'); await page.locator('#dock-more a[href="#/m/rooms"]').waitFor();
-  await page.click('#dock-more-btn');
+  // Mobile dock (V6.4): one scrollable row — every destination (Rooms included) is directly in the dock.
+  await page.locator('.dock a.nav-link[href="#/m/rooms"]').waitFor({ state: 'attached' });
+  assert.equal(await page.locator('#dock-more-btn').count(), 0);
   await page.setViewportSize({ width: 1280, height: 800 });
   await page.click('.topbar__actions .chip-btn:not(.chip-btn--icon)'); await page.waitForFunction(() => document.documentElement.dir === 'ltr');
   await ensureSignedOut();
@@ -3587,6 +3590,188 @@ await check('V630-UI Cleaning: routine is the page (Tasks tab), no Claim, Mark A
   assert.deepEqual(page.errors.slice(err0), [], 'no page errors during V6.3 flows');
   await ensureSignedOut();
   await page.evaluate((b) => { if (b.owner) window.__fake.set('users/UID_OWNER', b.owner); if (b.mona) window.__fake.set('users/UID_MONA', b.mona); }, before);
+});
+
+// =================================================================== V6.4 Batch A
+await check('V640-A Batch A: post-reset routine has no "no longer active" rows (reset twice, archive) · finance tile = monthly budget (under / over / none) · Rooms / Devices counts in Your Home, no Reminders / Rooms / Devices tiles · scrollable dock (320–412, RTL, keyboard) · Calendar gear + imported tag · Savings prices · Family spacing · Cleaning stats', async () => {
+  await ensureSignedOut();
+  const H = 'hV640'; const err0 = page.errors.length;
+  const before = await page.evaluate(() => { const d = window.__fake.dump(); return { owner: d['users/UID_OWNER'] || null }; });
+  await page.evaluate((h) => {
+    const now = new Date().toISOString(); const today = now.slice(0, 10);
+    const back = (n) => new Date(Date.now() - n * 86400000).toISOString().slice(0, 10);
+    window.__fake.set(`homes/${h}`, { name: 'V6.4 Home', createdBy: 'UID_OWNER', currency: 'EGP', timezone: 'UTC', language: 'en' });
+    window.__fake.set(`homes/${h}/roles/owner`, { name: 'Owner', rank: 100, permissions: ['*'], system: true, templateVersion: 7 });
+    window.__fake.set(`homes/${h}/members/UID_OWNER`, { uid: 'UID_OWNER', email: 'owner@example.com', displayName: 'Abdo', roleId: 'owner', status: 'active', joinedAt: now });
+    window.__fake.set(`homes/${h}/members/UID_MONA`, { uid: 'UID_MONA', email: 'mona@example.com', displayName: 'Mona Abdelrahman Mohamed Eliwa Al-Masri', roleId: 'owner', status: 'active', joinedAt: now });
+    window.__fake.set(`homes/${h}/rooms/kit`, { name: 'Kitchen', type: 'kitchen', icon: 'kitchen', sortOrder: 1, active: true });
+    window.__fake.set(`homes/${h}/rooms/liv`, { name: 'Living room', type: 'living', icon: 'sofa', sortOrder: 2, active: true });
+    window.__fake.set(`homes/${h}/rooms/old`, { name: 'Old store', type: 'other', icon: 'door', sortOrder: 3, active: false });
+    window.__fake.set(`homes/${h}/devices/dw`, { name: 'Dishwasher', category: 'kitchen_appliance', subtype: 'dishwasher', roomId: 'kit', status: 'operational', icon: 'dishwasher', active: true });
+    window.__fake.set(`homes/${h}/devices/dw2`, { name: 'Old dryer', category: 'laundry', subtype: 'dryer', roomId: 'kit', status: 'operational', icon: 'dryer', active: false });
+    window.__fake.set(`homes/${h}/cleaningSettings/general`, { catchUpMax: 3, startHour: 0, updatedBy: 'UID_OWNER', updatedAt: now, schemaVersion: 1 });
+    const T = (title, extra = {}) => ({ title, instructions: null, roomId: 'kit', priority: 'normal', assignMode: 'shared', assigneeUids: [], eligibleUids: [], recurrence: { kind: 'days', interval: 1 },
+      startDate: back(5), dueDate: null, endDate: null, estimatedMinutes: 10, active: true, archivedAt: null, archivedBy: null, schemaVersion: 1, ...extra });
+    window.__fake.set(`homes/${h}/cleaningTasks/tA`, T('Wipe the counters'));
+    window.__fake.set(`homes/${h}/cleaningTasks/tB`, T('Mop the floor', { roomId: 'liv' }));
+    window.__fake.set(`homes/${h}/cleaningTasks/tC`, T('Water the plants', { roomId: 'liv' }));
+    for (const [i, who] of ['UID_OWNER', 'UID_MONA', 'UID_MONA'].entries()) window.__fake.set(`homes/${h}/cleaningLog/hist${i}_r1`, { occurrenceId: `hist${i}`, taskId: i ? 'tB' : 'tA', rev: 1, action: 'complete', actorUid: who, at: now, notes: null, schemaVersion: 1 });
+    window.__fake.set(`homes/${h}/financeMonthly/${today.slice(0, 7)}`, { budgetMinor: 1000000, categoryLimits: {}, audience: 'household', readers: [], rev: 1, updatedBy: 'UID_OWNER', updatedAt: now, schemaVersion: 1 });
+    window.__fake.set(`homes/${h}/expenses/eV640`, { amountMinor: 425050, currency: 'EGP', date: today, category: 'food', audience: 'household', readers: [], status: 'active', createdBy: 'UID_OWNER', title: 'Groceries', walletId: null, schemaVersion: 1, createdAt: now, updatedAt: now });
+    window.__fake.set(`homes/${h}/expenses/eOld`, { amountMinor: 999900, currency: 'EGP', date: back(40), category: 'food', audience: 'household', readers: [], status: 'active', createdBy: 'UID_OWNER', title: 'Last month', walletId: null, schemaVersion: 1, createdAt: now, updatedAt: now });
+    window.__fake.set(`homes/${h}/priceQuotes/qV640`, { key: 'gold-24', priceMinor: 703500, currency: 'EGP', source: 'manual', observedAt: Date.now(), note: null, createdBy: 'UID_OWNER', createdAt: now, schemaVersion: 1 });
+    window.__fake.patch('users/UID_OWNER', { defaultHomeId: h, language: 'en', displayName: 'Abdo' });
+  }, H);
+  const overlap = (sel1, sel2) => page.evaluate(([a, b]) => {
+    const x = document.querySelector(a); const y = document.querySelector(b); if (!x || !y) return 'missing';
+    const r = x.getBoundingClientRect(); const s = y.getBoundingClientRect();
+    return r.left < s.right - 0.5 && s.left < r.right - 0.5 && r.top < s.bottom - 0.5 && s.top < r.bottom - 0.5;
+  }, [sel1, sel2]);
+  const noOverflow = async (what) => assert.ok((await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)) <= 0, `${what}: no page-level horizontal overflow`);
+  await login('owner@example.com'); await page.locator('.hero__home').waitFor();
+
+  // ---- A2: reproduce — the day's plan is saved with catch-up (pre-reset) dates, then the progress is reset
+  await page.goto(BASE + '#/m/cleaning'); await page.locator('#cl-adv-list .cl-item[data-task]').first().waitFor();
+  await page.waitForFunction((h) => Object.keys(window.__fake.dump()).some((k) => k.startsWith(`homes/${h}/cleaningRoutines/`)), H);
+  const planned = await page.locator('#cl-adv-list .cl-item[data-task]').count();
+  assert.ok(planned > 3, 'plan includes overdue catch-up items');
+  const resetOnce = async () => {
+    await page.click('#cl-adv-tab-settings'); await page.click('#cl-reset-progress'); await page.locator('#cl-reset-progress-body').waitFor();
+    await page.locator('dialog[open] button[type=submit]').click(); await page.locator('#cl-reset-result', { hasText: /Progress reset/ }).waitFor();
+    await page.click('#cl-adv-tab-routine'); await page.locator('#cl-adv-routine').waitFor();
+  };
+  await resetOnce();
+  const noInactive = async () => {
+    assert.equal(await page.locator('#cl-adv-routine [data-status=inactive], #cl-adv-routine .cl-item--archived').count(), 0, 'no obsolete rows');
+    assert.doesNotMatch(await page.locator('#cl-adv-routine').innerText(), /no longer active/);
+  };
+  await noInactive();
+  assert.deepEqual((await page.locator('#cl-adv-routine .cl-item[data-task]').evaluateAll((x) => x.map((e) => e.dataset.task))).sort(), ['tA', 'tB', 'tC'], 'each task exactly once: today, under the restarted schedule');
+  await page.locator('#cl-adv-obsolete').waitFor();
+  assert.equal(Number(await page.locator('#cl-adv-obsolete').getAttribute('data-n')), planned - 3, 'obsolete keys counted once, not rendered');
+  await page.locator('#cl-markall-btn-routine', { hasText: '(3)' }).waitFor();
+  // review fix: the counter, bar and Mark All describe the SAME shown items (never the raw saved plan)
+  const prog = async () => page.evaluate(() => { const p = document.querySelector('#cl-adv-progress'); const b = document.querySelector('#cl-adv-routine .cl-progress__bar');
+    return [p.dataset.done, p.dataset.total, b.getAttribute('aria-valuenow'), p.textContent, document.querySelectorAll('#cl-adv-routine .cl-item[data-task]').length]; });
+  assert.deepEqual(await prog(), ['0', '3', '0', '0 of 3 done today', 3]);
+  await page.locator('#cl-adv-routine .cl-item[data-task="tA"] [data-action=complete]').first().click();
+  await page.waitForFunction(() => document.querySelector('#cl-adv-progress').dataset.done === '1');
+  assert.deepEqual(await prog(), ['1', '3', '33', '1 of 3 done today', 3]);
+  await resetOnce(); await noInactive();   // repeated reset: still clean
+  assert.deepEqual(await prog(), ['0', '3', '0', '0 of 3 done today', 3], 'second reset undid today\'s progress; counts stay consistent');
+  await page.evaluate((h) => window.__fake.patch(`homes/${h}/cleaningTasks/tC`, { active: false }), H);   // archived elsewhere
+  await page.locator('#cl-adv-routine .cl-item[data-task="tC"]').waitFor({ state: 'detached' }); await noInactive();
+  assert.deepEqual(await prog(), ['0', '2', '0', '0 of 2 done today', 2], 'archived task leaves the counter too');
+  const hist = await page.evaluate((h) => Object.keys(window.__fake.dump()).filter((k) => k.startsWith(`homes/${h}/cleaningLog/`)).length, H);
+  assert.ok(hist >= 3, 'audit history kept');
+  // A3: statistics — long names wrap beside their count, groups spaced
+  await page.setViewportSize({ width: 320, height: 760 });
+  await page.click('#cl-adv-tab-stats'); await page.locator('#cl-adv-by-member .cl-stat-row').first().waitFor();
+  assert.equal(await overlap('#cl-adv-by-member .cl-stat-row .cl-stat-row__name', '#cl-adv-by-member .cl-stat-row .cl-stat-row__value'), false, 'long name never under the count');
+  await page.locator('#cl-adv-by-room .cl-stat-row', { hasText: 'Living room' }).waitFor();
+  await noOverflow('stats 320');
+  await shot(page, '66-v640-cleaning-stats-320');
+
+  // ---- A6 / A8: dashboard
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(BASE + '#/dashboard'); await page.locator('#fin-widget-remaining').waitFor();
+  assert.match(await page.locator('#fin-widget-remaining').innerText(), /5,749\.50/, 'remaining = budget − this month (last month excluded)');
+  await page.locator('#fin-widget-pct', { hasText: '43% of budget used' }).waitFor();
+  assert.equal(await page.locator('#fin-widget-bar').getAttribute('aria-valuenow'), '43');
+  assert.doesNotMatch(await page.locator('.summary-card--finance').innerText(), /10.day|No active/i, 'no obsolete 10-day budget text');
+  assert.equal(await page.locator('#rm-widget, .summary-card[href="#/m/rooms"], .summary-card[href="#/m/devices"]').count(), 0, 'Reminders / Rooms / Devices tiles removed');
+  await page.locator('#home-rooms-count[data-count="2"]', { hasText: '2 active rooms' }).waitFor();
+  await page.locator('#home-devices-count[data-count="1"]', { hasText: '1 active device' }).waitFor();
+  await page.locator('#tool-reminders').waitFor(); await page.locator('#reminders-bell').waitFor();
+  await page.evaluate((h) => window.__fake.patch(`homes/${h}/expenses/eV640`, { amountMinor: 1234567 }), H);
+  await page.locator('#fin-widget-pct.is-over', { hasText: '123% of budget used — over budget' }).waitFor();
+  assert.match(await page.locator('#fin-widget-remaining').innerText(), /−|-/, 'negative remaining shown');
+  assert.equal(await page.locator('#fin-widget-bar').getAttribute('aria-valuenow'), '100', 'bar clamped');
+  assert.match(await page.locator('#fin-widget-remaining + .summary-card__label').innerText(), /over budget/);
+  await shot(page, '67-v640-dashboard-390');
+  await page.evaluate((h) => { const d = window.__fake.dump(); for (const k of Object.keys(d)) if (k.startsWith(`homes/${h}/financeMonthly/`)) window.__fake.remove(k); }, H);
+  await page.locator('#fin-widget-status', { hasText: 'No monthly budget set' }).waitFor();
+  assert.equal(await page.locator('#fin-widget-bar, #fin-widget-pct').count(), 0, 'no bar / % without a budget');
+  await noOverflow('dashboard 390');
+
+  // ---- A7: dock at 320 / 360 / 390 / 412 (EN), keyboard, active item visible
+  for (const w of [320, 360, 390, 412]) {
+    await page.setViewportSize({ width: w, height: 760 });
+    await page.goto(BASE + '#/m/devices'); await page.locator('.dock .nav-link.is-active').waitFor();
+    await page.waitForTimeout(150);
+    const m = await page.evaluate(() => {
+      const d = document.querySelector('.dock'); const a = d.querySelector('.nav-link.is-active'); const r = a.getBoundingClientRect(); const dr = d.getBoundingClientRect();
+      const sizes = [...d.querySelectorAll('.nav-link')].map((x) => { const b = x.getBoundingClientRect(); return [b.width, b.height]; });
+      return { visible: r.left >= dr.left - 1 && r.right <= dr.right + 1, minW: Math.min(...sizes.map((s) => s[0])), minH: Math.min(...sizes.map((s) => s[1])), scroll: d.scrollWidth > d.clientWidth, n: sizes.length };
+    });
+    assert.ok(m.visible, `${w}px: active item scrolled into view`);
+    assert.ok(m.minW >= 63.5 && m.minH >= 51.5, `${w}px: touch targets never shrink (${m.minW}×${m.minH})`);
+    assert.equal(await page.locator('#dock-more-btn').count(), 0);
+    await noOverflow(`dock ${w}`);
+  }
+  await page.locator('.dock .nav-link').first().focus(); await page.keyboard.press('ArrowRight');
+  assert.equal(await page.evaluate(() => [...document.querySelectorAll('.dock .nav-link')].indexOf(document.activeElement)), 1, 'ArrowRight → next item');
+  await page.keyboard.press('End');
+  assert.equal(await page.evaluate(() => document.activeElement.getAttribute('href')), '#/settings', 'End → Settings (main Settings kept)');
+  await shot(page, '68-v640-dock-412');
+
+  // ---- A4: Calendar gear (Calendar only) + Imported tag vs Remove button
+  await page.setViewportSize({ width: 320, height: 760 });
+  await page.goto(BASE + '#/m/calendar'); await page.locator('#cal-settings').waitFor();
+  assert.equal((await page.locator('#cal-settings').innerText()).trim(), '', 'icon only');
+  assert.equal(await page.locator('#cal-settings').getAttribute('aria-label'), 'Calendar settings');
+  assert.equal(await page.locator('#cal-settings svg').count(), 1);
+  const gb = await page.locator('#cal-settings').boundingBox(); assert.ok(gb.width >= 40 && gb.height >= 40, 'touch target');
+  await page.click('#cal-import');
+  await page.fill('#cal-imp-text', 'Subject,Start Date,Start Time,End Date,End Time,All Day Event,Description,Location,Private\nV640 trip,1/9/2026,,1/10/2026,,True,,,False\n');
+  await page.click('#cal-imp-preview'); await page.click('#cal-imp-confirm');
+  await page.waitForFunction((h) => Object.entries(window.__fake.dump()).some(([k, v]) => k.startsWith(`homes/${h}/calendarImports/`) && v.status === 'active'), H);
+  await page.goto(BASE + '#/dashboard'); await page.goto(BASE + '#/m/calendar'); await page.click('#cal-settings');
+  await page.locator('#cal-batches .cal-batch [data-action=remove-batch]').waitFor();
+  assert.equal(await overlap('#cal-batches .cal-batch [data-role=status]', '#cal-batches .cal-batch [data-action=remove-batch]'), false, 'Imported tag never overlaps Remove (EN 320)');
+  await shot(page, '69-v640-calendar-settings-320');
+  // ---- A5: Savings prices: derived tag vs price / button
+  await page.goto(BASE + '#/m/savings'); await page.click('#sv-tab-valuation');
+  await page.locator('#sv-prices [data-key="gold-21"]').waitFor();
+  assert.match(await page.locator('#sv-prices [data-key="gold-21"]').innerText(), /Derived from 24K\/999/);
+  assert.equal(await overlap('#sv-prices [data-key="gold-21"] .pill', '#sv-price-gold-21'), false, 'derived tag vs price (320)');
+  assert.equal(await overlap('#sv-price-gold-21', '#sv-prices [data-key="gold-21"] .btn'), false, 'price vs Update');
+  assert.match(await page.locator('#sv-price-gold-21').innerText(), /6,155\.63\/g/, 'pricing unchanged (24K × 21/24)');
+  await noOverflow('savings 320');
+  await shot(page, '70-v640-savings-prices-320');
+  // ---- A1: Family spacing
+  await page.goto(BASE + '#/family'); await page.locator('#member-list .member-card').nth(1).waitFor();
+  const gaps = await page.evaluate(() => { const kids = [...document.querySelector('.family-content').children]; const out = [];
+    for (let i = 1; i < kids.length; i++) out.push(kids[i].getBoundingClientRect().top - kids[i - 1].getBoundingClientRect().bottom); return out; });
+  assert.ok(gaps.every((g) => g >= 12), `sections are spaced (${gaps.map((g) => Math.round(g))})`);
+  await noOverflow('family 320');
+  await shot(page, '71-v640-family-320');
+
+  // ---- RTL (Arabic) + dark at 360
+  await page.setViewportSize({ width: 1280, height: 800 });   // the language chip lives in the desktop top bar
+  await page.click('.topbar__actions .chip-btn:not(.chip-btn--icon)'); await page.waitForFunction(() => document.documentElement.dir === 'rtl');
+  await page.setViewportSize({ width: 360, height: 760 });
+  await page.evaluate(() => { document.documentElement.dataset.theme = 'dark'; });
+  await page.goto(BASE + '#/m/calendar'); await page.click('#cal-settings'); await page.locator('#cal-batches .cal-batch [data-action=remove-batch]').waitFor();
+  assert.equal(await overlap('#cal-batches .cal-batch [data-role=status]', '#cal-batches .cal-batch [data-action=remove-batch]'), false, 'Imported tag never overlaps Remove (RTL 360)');
+  assert.equal(await page.locator('#cal-settings').getAttribute('aria-label'), 'إعدادات التقويم');
+  await noOverflow('calendar RTL');
+  await shot(page, '72-v640-calendar-settings-ar-dark-360');
+  await page.goto(BASE + '#/m/cleaning'); await page.locator('.dock .nav-link.is-active').waitFor(); await page.waitForTimeout(150);
+  assert.ok(await page.evaluate(() => { const d = document.querySelector('.dock'); const a = d.querySelector('.nav-link.is-active'); const r = a.getBoundingClientRect(); const dr = d.getBoundingClientRect(); return r.left >= dr.left - 1 && r.right <= dr.right + 1; }), 'RTL: active visible');
+  await page.locator('.dock .nav-link').first().focus(); await page.keyboard.press('ArrowLeft');
+  assert.equal(await page.evaluate(() => [...document.querySelectorAll('.dock .nav-link')].indexOf(document.activeElement)), 1, 'RTL: ArrowLeft → next item');
+  await page.goto(BASE + '#/dashboard'); await page.locator('#fin-widget-status').waitFor();
+  await noOverflow('dashboard RTL');
+  await shot(page, '73-v640-dashboard-ar-dark-360');
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.click('.topbar__actions .chip-btn:not(.chip-btn--icon)'); await page.waitForFunction(() => document.documentElement.dir === 'ltr');
+  await page.evaluate(() => { document.documentElement.dataset.theme = 'light'; });
+  // desktop: rail navigation unchanged, dock hidden
+  assert.ok(await page.locator('.rail').isVisible()); assert.ok(!(await page.locator('.dock').isVisible()));
+  assert.deepEqual(page.errors.slice(err0), [], 'no page errors during V6.4 Batch A flows');
+  await ensureSignedOut();
+  await page.evaluate((b) => { if (b.owner) window.__fake.set('users/UID_OWNER', b.owner); }, before);
 });
 
 // B0 regression (must stay LAST on the main page: it freezes the browser clock). Advanced must wait for

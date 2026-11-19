@@ -1,5 +1,20 @@
 # Changelog
 
+## 6.4.0-a — V6.4 Batch A: existing application corrections (November 2026) — NOT DEPLOYED, awaiting review
+
+- Cleaning: Today's routine no longer shows repeated "This task is no longer active" rows after a reset, restore or archive. Obsolete plan entries are excluded and counted once, and history is kept.
+- Cleaning statistics: by member and by room are shown as wrapped, ranked rows.
+- Family page spacing fixed; the stale "Inviting family members arrives in a later update" note was removed from Settings.
+- Calendar: a compact settings gear replaces the settings button, and the Imported tag no longer overlaps the Remove button.
+- Life Savings: price tags no longer overlap prices or buttons.
+- Dashboard: the Finance tile shows the remaining monthly budget with a usage bar and percentage.
+- Dashboard: Rooms and Devices tiles became active counts in the Your Home card.
+- Dashboard: the Reminders tile was removed; Reminders now has a Tools entry, and the bell, page and notifications are unchanged.
+- Mobile dock: one horizontally scrollable row (no "More" menu), with an auto-visible active item, keyboard support, RTL and safe areas.
+- Review corrections: the routine counter, bar and empty state are now computed over exactly the shown items (plan + extras), and "settled" replaces "0 of 0".
+- Review corrections: `firebase.json` hosting excludes docs, tools, reports, archives, logs, lockfiles, credentials and dot-folders, with a new static allowlist test.
+- No rules, schema or data changes. `.gitignore` and `.github/` are not shipped (the repository versions stay authoritative).
+
 ## 5.9.1 — Phase 5.6: Smart Reminders (October 2026) — NOT DEPLOYED
 
 - **In-app Reminders center `#/reminders`**, with a top-bar bell (live count only on Dashboard / Reminders / Cleaning / Maintenance) and a dashboard card:

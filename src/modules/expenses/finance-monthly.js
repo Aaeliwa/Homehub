@@ -64,6 +64,25 @@ export function progress(spentMinor, budgetMinor) {
   if (!Number.isInteger(budgetMinor) || budgetMinor <= 0) return null;
   return { spentMinor, budgetMinor, pct: Math.round((spentMinor * 100) / budgetMinor), over: spentMinor > budgetMinor, remainingMinor: budgetMinor - spentMinor };
 }
+/**
+ * V6.4 Dashboard tile: the CURRENT month's budget from the same authoritative selectors as the Monthly tab
+ * (effectiveMonthly + monthStats: household, budget-eligible spending minus refunds, by each record's own
+ * date). Never a wallet balance, never a 10-day / period budget. Pure integer minor units:
+ *  - no budget (null / missing) → { hasBudget: false, spentMinor } — no percentage, no remaining
+ *  - budget 0 → remaining = −spent, percentage null (no division by zero)
+ *  - pct = round(spent / budget × 100), the REAL value (may exceed 100); fillPct is clamped to 0–100
+ *    for the bar only; refunds larger than spending give spent < 0 → pct < 0 shown as 0 %, fill 0.
+ */
+export function monthBudget(snap, ym) {
+  const spentMinor = monthStats(snap, [], ym).totalMinor;
+  const setting = effectiveMonthly(snap.monthly || [], ym);
+  const b = setting.budgetMinor;
+  if (!Number.isInteger(b) || b < 0) return { ym, hasBudget: false, budgetMinor: null, spentMinor, remainingMinor: null, pct: null, fillPct: 0, over: false };
+  const remainingMinor = b - spentMinor;
+  const pct = b > 0 ? Math.max(0, Math.round((spentMinor * 100) / b)) : null;
+  return { ym, hasBudget: true, budgetMinor: b, spentMinor, remainingMinor, pct, fillPct: pct === null ? (spentMinor > 0 ? 100 : 0) : Math.min(100, pct), over: spentMinor > b, inherited: !!setting.inherited };
+}
+
 /** Only categories WITH a configured limit (none → empty list, no empty bars). */
 export function categoryProgress(stats, limits = {}) {
   return Object.entries(limits || {}).filter(([, v]) => Number.isInteger(v) && v > 0)

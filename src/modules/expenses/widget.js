@@ -1,12 +1,13 @@
 /**
  * Finance dashboard widget. Consumes only store.summary() (no record internals) from the
- * shared scope-bound store. Amounts appear only with expenses.viewFinancialTotals; otherwise
- * the card shows non-financial status (an active budget exists / next commitment date).
+ * shared scope-bound store. V6.4: primary value = remaining CURRENT MONTHLY budget (+ usage bar / %).
+ * Amounts and percentages appear only with expenses.viewFinancialTotals; otherwise the card shows
+ * non-financial status (a monthly budget is set or not / next commitment date).
  */
 import { h } from '../../core/utils/dom.js';
-import { t, getLocale } from '../../core/i18n/i18n.js';
+import { t, getLocale, formatNumber } from '../../core/i18n/i18n.js';
 import { getFinanceStore } from './finance-service.js';
-import { todayIn, formatDateShort } from './calendar.js';
+import { todayIn, formatDateShort, formatMonth } from './calendar.js';
 import { money } from './finance-ui.js';
 
 export function mount(slot, ctx) {
@@ -25,13 +26,31 @@ export function mount(slot, ctx) {
     if (snap.status === 'error') { lines.replaceChildren(h('span', { class: 'summary-card__title' }, t('module.expenses.name')), h('span', { class: 'summary-card__label' }, t('finance.widget.unavailable'))); return; }
     if (snap.status !== 'ready') return;
     const s = store.summary(today);
-    const c = s.activeCycles[0];
-    lines.replaceChildren(
-      h('span', { class: 'summary-card__title' }, t('module.expenses.name')),
-      totals ? h('span', { class: 'summary-card__figure' }, h('span', { class: 'summary-card__value', id: 'fin-widget-month' }, money(s.monthTotalMinor, s.currency)), h('span', { class: 'summary-card__label' }, t('finance.widget.thisMonth'))) : '',
-      s.v6 ? h('span', { class: 'summary-card__extra', id: 'fin-widget-v6' }, totals ? t('finance.v6.widget', { remaining: money(s.v6.remainingMinor, s.currency) }) : t('finance.v6.widgetActive'))
-      : c ? h('span', { class: 'summary-card__extra', id: 'fin-widget-cycle' }, totals ? t('finance.widget.cycle', { remaining: money(c.remainingMinor, c.currency), perDay: money(c.safePerDayMinor, c.currency) }) : t('finance.widget.cycleActive', { days: c.daysRemaining }))
-        : h('span', { class: 'summary-card__extra' }, t('finance.widget.noCycle')),
-      s.nextCommitment ? h('span', { class: 'summary-card__extra' }, t('finance.widget.next', { name: s.nextCommitment.name, date: formatDateShort(s.nextCommitment.nextDueDate, getLocale()) })) : '');
+    // V6.4: the tile shows the CURRENT MONTHLY budget (Monthly tab selectors). No 10-day / period budget.
+    const mb = s.monthBudget;
+    const month = formatMonth(mb.ym, getLocale());
+    const out = [h('span', { class: 'summary-card__title' }, t('finance.widget.monthTitle', { month }))];
+    if (!totals) {
+      out.push(h('span', { class: 'summary-card__extra', id: 'fin-widget-status' }, t(mb.hasBudget ? 'finance.widget.budgetSet' : 'finance.widget.noBudget')));
+    } else if (mb.hasBudget) {
+      const neg = mb.remainingMinor < 0;
+      out.push(
+        h('span', { class: 'summary-card__figure' },
+          h('span', { class: ['summary-card__value', neg && 'is-negative'], id: 'fin-widget-remaining', dir: 'ltr' }, money(mb.remainingMinor, s.currency)),
+          h('span', { class: 'summary-card__label' }, t(neg ? 'finance.widget.overBy' : 'finance.widget.remaining'))),
+        h('span', { class: ['fin-budget-bar', mb.over && 'is-over'], role: 'progressbar', id: 'fin-widget-bar',
+          'aria-label': t('finance.widget.used'), 'aria-valuemin': '0', 'aria-valuemax': '100', 'aria-valuenow': String(mb.fillPct),
+          'aria-valuetext': mb.pct === null ? t('finance.widget.zeroBudget') : t(mb.over ? 'finance.widget.pctOver' : 'finance.widget.pct', { pct: formatNumber(mb.pct) }) },
+          h('span', { class: 'fin-budget-bar__fill', style: `inline-size:${mb.fillPct}%` })),
+        h('span', { class: ['summary-card__extra', 'fin-budget-pct', mb.over && 'is-over'], id: 'fin-widget-pct' },
+          mb.pct === null ? t('finance.widget.zeroBudget') : t(mb.over ? 'finance.widget.pctOver' : 'finance.widget.pct', { pct: formatNumber(mb.pct) })),
+        h('span', { class: 'summary-card__extra', id: 'fin-widget-spent' }, t('finance.widget.spentOf', { spent: money(mb.spentMinor, s.currency), budget: money(mb.budgetMinor, s.currency) })));
+    } else {
+      out.push(
+        h('span', { class: 'summary-card__figure' }, h('span', { class: 'summary-card__value', id: 'fin-widget-month', dir: 'ltr' }, money(mb.spentMinor, s.currency)), h('span', { class: 'summary-card__label' }, t('finance.widget.spentLabel'))),
+        h('span', { class: 'summary-card__extra', id: 'fin-widget-status' }, t('finance.widget.noBudget')));
+    }
+    if (s.nextCommitment) out.push(h('span', { class: 'summary-card__extra' }, t('finance.widget.next', { name: s.nextCommitment.name, date: formatDateShort(s.nextCommitment.nextDueDate, getLocale()) })));
+    lines.replaceChildren(...out);
   });
 }

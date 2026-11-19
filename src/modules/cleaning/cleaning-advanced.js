@@ -70,9 +70,51 @@ export function routineItems({ plan, tasks, occurrences, isVisible = () => true 
     const trig = isDate ? {} : suffix[0] === 'u' ? { triggerEventId: suffix.slice(1) } : suffix[0] === 's' ? { triggerSeasonRev: Number(suffix.slice(1)) } : {};
     // V6.3: an item dated before the task's (reset) schedule start is no longer part of it — never resurrected.
     const stale = task && !task.trigger && isDate && date < task.startDate;
-    const state = !task || task.active !== true || !isVisible(task) || stale ? 'inactive' : occ ? occ.status : 'open';
-    return { key, task, date, occ, state, occId: key, ...trig };
+    const reason = !task ? 'missing' : task.active !== true ? 'archived' : !isVisible(task) ? 'hidden' : stale ? 'reset' : null;
+    const state = reason ? 'inactive' : occ ? occ.status : 'open';
+    return { key, task, date, occ, state, reason, occId: key, ...trig };
   });
+}
+
+/**
+ * V6.4: what Today's routine SHOWS. The day's plan (cleaningRoutines/{day}) is saved once and is create-only,
+ * so after a progress reset / restore-defaults / archive it still names keys that are no longer part of any
+ * schedule (dates before the restarted startDate, archived / removed / hidden tasks). Those are NOT current
+ * work: they are excluded from the actionable list (and from Mark All / progress), counted once as
+ * `obsolete`, and their occurrences + audit log stay untouched (history / statistics). Valid current work
+ * that the stored plan does not name (e.g. the restarted schedule's date) comes from the live board as
+ * `extras`, so nothing valid is dropped and nothing is listed twice.
+ */
+export function routineView({ plan, tasks, occurrences, board, isVisible = () => true }) {
+  const all = routineItems({ plan, tasks, occurrences, isVisible });
+  const items = all.filter((it) => it.state !== 'inactive');
+  const obsolete = all.filter((it) => it.state === 'inactive');
+  const shownKeys = new Set(items.map((it) => it.key));
+  const extras = []; const seen = new Set();
+  for (const it of [...(board ? board.today : []), ...(board ? board.overdue : [])]) {
+    const key = it.occId || `${it.task.id}_${String(it.date).replace(/-/g, '')}`;
+    if (shownKeys.has(key) || seen.has(key)) continue;
+    // V6.4.0-a review: normalise the board item's state exactly like a plan item (occurrence status, else
+    // 'open'), so extras are counted by the same rules (skipped / postponed out of the total, done = done).
+    seen.add(key); extras.push({ ...it, key, state: it.occ ? it.occ.status : 'open' });
+  }
+  // Progress / empty state are computed over EXACTLY what is shown (current plan items + extras), each key
+  // once — never over the raw saved plan (whose obsolete keys are not shown) and never over extras twice.
+  const shown = [...items, ...extras];
+  return { items, obsolete, extras, shown, progress: routineProgress(shown) };
+}
+
+/**
+ * V6.4.0-a review: one consistent summary for the progress text, the bar and the empty state.
+ *  - 'empty'    nothing shown at all                         → "Nothing to clean today"
+ *  - 'settled'  only skipped / postponed items are shown     → "Nothing left today (n skipped, n postponed)"
+ *  - 'progress' otherwise                                    → "{done} of {total} done today", bar = done / total
+ */
+export function routineSummary(view) {
+  const p = view.progress;
+  const kind = !view.shown.length ? 'empty' : p.total === 0 ? 'settled' : 'progress';
+  const pct = p.total ? Math.round((p.done / p.total) * 100) : kind === 'settled' ? 100 : 0;
+  return { kind, done: p.done, total: p.total, skipped: p.skipped, postponed: p.postponed, pct };
 }
 export function routineProgress(items) {
   const counted = items.filter((i) => i.state !== 'inactive' && i.state !== 'skipped' && i.state !== 'postponed');

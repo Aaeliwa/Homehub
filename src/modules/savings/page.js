@@ -179,7 +179,7 @@ export function mount(outlet, ctx) {
       const metal = k.includes('-');
       const q = metal ? metalPrice(s.quotes, k.split('-')[0], k.split('-')[1]) : latestQuote(s.quotes, k);
       const fr = q ? (q.derived ? 'derived' : q.source === 'manual' ? (freshness(q, now) === 'stale' ? 'staleManual' : 'manual') : isLive(q, now) ? 'live' : 'stale') : 'unavailable';
-      return h('li', { class: 'fin-row', dataset: { key: k } },
+      return h('li', { class: 'fin-row fin-row--wrap sv-price-row', dataset: { key: k } },
         h('span', { class: 'fin-row__main' }, h('span', { class: 'fin-row__note' }, t(`savings.priceKey.${metal ? k : 'fx'}`, { c: k })),
           h('span', { class: 'fin-row__sub' }, q ? `${quoteTime(q, locale)}${q.note ? ` · ${q.note}` : ''}` : t('savings.price.none'))),
         h('span', { class: ['pill', `fresh--${fr}`] }, t(`savings.fresh.${fr}`)),
@@ -193,7 +193,7 @@ export function mount(outlet, ctx) {
         h('ul', { class: 'fin-list', id: 'sv-prices' }, [...keys].map(row)),
         can('savings.prices') ? h('button', { type: 'button', class: 'btn btn--secondary', id: 'sv-add-price', onClick: () => openPriceForm(env) }, t('savings.price.add')) : null),
       h('section', { class: 'card fin-card' }, h('h2', { class: 'card__title' }, t('savings.price.history')),
-        hist.length ? h('ul', { class: 'fin-list' }, hist.map((q) => h('li', { class: 'fin-row' }, h('span', { class: 'fin-row__date' }, quoteTime(q, locale)),
+        hist.length ? h('ul', { class: 'fin-list' }, hist.map((q) => h('li', { class: 'fin-row fin-row--wrap' }, h('span', { class: 'fin-row__date' }, quoteTime(q, locale)),
           h('span', { class: 'fin-row__main' }, `${t(`savings.priceKey.${q.key.includes('-') ? q.key : 'fx'}`, { c: q.key })} · ${t(q.source === 'manual' ? 'savings.fresh.manual' : 'savings.fresh.live')}${env.directory ? ` · ${env.directory.nameOf(q.createdBy, '')}` : ''}`),
           h('span', { class: 'fin-row__amount', dir: 'ltr' }, money(q.priceMinor, home.currency))))) : h('p', { class: 'empty' }, t('savings.price.none'))));
   }

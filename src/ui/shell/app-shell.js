@@ -120,21 +120,27 @@ export function appShell({ state, registry, session, prefs, route }) {
 
     h('nav', { class: 'dock', 'aria-label': t('nav.label') }, dockItems()));
 
-  // Phase 5.3: the mobile dock has 5 slots. When there are more destinations than fit, the 4th
-  // slot becomes "More" (an accessible list of the rest), so no module drops out of reach.
-  function dockItems() {
-    if (items.length <= 4) return [...items, settingsItem].map((i) => link(i, 'dock'));
-    const rest = items.slice(3);
-    const moreActive = rest.some((i) => isActive(i, route));
-    const panel = h('div', { class: 'dock-more', id: 'dock-more', role: 'menu', hidden: true },
-      rest.map((i) => h('a', { href: `#${i.path}`, role: 'menuitem', class: ['dock-more__item', isActive(i, route) && 'is-active'],
-        onClick: () => { panel.hidden = true; btn.setAttribute('aria-expanded', 'false'); } }, i.glyph(), h('span', null, i.label))));
-    const btn = h('button', { type: 'button', class: ['nav-link', 'nav-link--dock', 'dock__more-btn', moreActive && 'is-active'], id: 'dock-more-btn',
-      'aria-haspopup': 'menu', 'aria-expanded': 'false', 'aria-controls': 'dock-more',
-      onClick: () => { panel.hidden = !panel.hidden; btn.setAttribute('aria-expanded', String(!panel.hidden)); } },
-      icon('chevronDown', { size: 22 }), h('span', { class: 'nav-link__label' }, t('nav.more')));
-    return [...items.slice(0, 3).map((i) => link(i, 'dock')), h('div', { class: 'dock__more' }, btn, panel), link(settingsItem, 'dock')];
-  }
+  // V6.4: the mobile dock is ONE horizontally scrollable row of every navigable destination (+ Settings):
+  // no "More" overflow. Touch targets never shrink; the active item is scrolled into view; Arrow / Home /
+  // End keys move between items (RTL aware); the row itself never causes page-level horizontal overflow.
+  function dockItems() { return [...items, settingsItem].map((i) => link(i, 'dock')); }
+  const dockEl = el.querySelector('.dock');
+  dockEl.addEventListener('keydown', (e) => {
+    const links = [...dockEl.querySelectorAll('a.nav-link')]; const i = links.indexOf(document.activeElement);
+    if (i < 0) return;
+    const rtl = getComputedStyle(dockEl).direction === 'rtl';
+    const step = e.key === 'ArrowRight' ? (rtl ? -1 : 1) : e.key === 'ArrowLeft' ? (rtl ? 1 : -1) : 0;
+    const next = e.key === 'Home' ? 0 : e.key === 'End' ? links.length - 1 : step ? Math.min(links.length - 1, Math.max(0, i + step)) : -1;
+    if (next < 0) return;
+    e.preventDefault(); links[next].focus();
+  });
+  // Keep the current page's item visible (the shell is rebuilt on every route change).
+  requestAnimationFrame(() => {
+    const scrollable = dockEl.scrollWidth > dockEl.clientWidth + 1;
+    dockEl.classList.toggle('dock--scroll', scrollable);   // edge fade hints that more items exist
+    const active = dockEl.querySelector('.nav-link.is-active');
+    if (active && scrollable) active.scrollIntoView({ block: 'nearest', inline: 'center', behavior: 'auto' });
+  });
 
   return {
     el,

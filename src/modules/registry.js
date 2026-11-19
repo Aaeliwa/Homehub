@@ -20,6 +20,7 @@
  *   permissions:     [{ id, defaultRoles }]     // permissions this module owns
  *   page:            null | () => import('./page.js')          // { mount(el, ctx) -> unmount }
  *   dashboardWidget: null | { order, size: 'sm'|'md'|'lg', load: () => import('./widget.js') }
+ *   homeCount:       null | { order, load: () => import('./widget.js') }   // V6.4: a live count in the Your Home card ({ mountCount(dd, ctx) -> unmount })
  * }
  */
 import { isPermissionId, namespaceOf } from '../core/permissions/permission-format.js';
@@ -46,10 +47,12 @@ export function defineModule(def) {
   }
   if (def.enabled && typeof def.page !== 'function') fail('an enabled module must provide page()');
   if (def.dashboardWidget && typeof def.dashboardWidget.load !== 'function') fail('dashboardWidget.load must be a function');
+  if (def.homeCount && typeof def.homeCount.load !== 'function') fail('homeCount.load must be a function');
   return Object.freeze({
     order: 100,
     page: null,
     dashboardWidget: null,
+    homeCount: null,
     ...def,
     permissions: Object.freeze(def.permissions.map((p) => Object.freeze({ ...p, defaultRoles: Object.freeze([...p.defaultRoles]) }))),
   });
@@ -98,6 +101,10 @@ export function createRegistry(definitions) {
     widgetsFor: (perms) => visible(perms)
       .filter((m) => m.enabled && m.dashboardWidget)
       .sort((a, b) => (a.dashboardWidget.order ?? a.order) - (b.dashboardWidget.order ?? b.order)),
+    /** V6.4: live counts shown inside the Your Home card (Rooms, Devices), in order. */
+    homeCountsFor: (perms) => visible(perms)
+      .filter((m) => m.enabled && m.homeCount)
+      .sort((a, b) => (a.homeCount.order ?? a.order) - (b.homeCount.order ?? b.order)),
     /** Every permission declared by modules. */
     permissions: () => modules.flatMap((m) => m.permissions),
   });

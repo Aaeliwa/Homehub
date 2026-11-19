@@ -1,36 +1,22 @@
 /**
- * Rooms dashboard widget. Consumes ONLY the module's summary contract
- * ({ activeCount, archivedCount }) from the shared, scope-bound store — no extra reads.
+ * Rooms count for the Dashboard's Your Home card (V6.4 — replaces the standalone Rooms tile).
+ * Consumes ONLY the module's summary contract ({ activeCount }) from the shared, scope-bound store —
+ * no extra reads. Shows ACTIVE rooms only (archived rooms are not counted).
  */
 import { h } from '../../core/utils/dom.js';
 import { t, tp, formatNumber } from '../../core/i18n/i18n.js';
 import { getRoomsStore } from './rooms-service.js';
 
-export function mount(slot, ctx) {
+export function mountCount(dd, ctx) {
   let store;
-  try { store = getRoomsStore(ctx); } catch { slot.remove(); return () => {}; }
-
-  const value = h('span', { class: 'summary-card__value' }, '…');
-  const label = h('span', { class: 'summary-card__label' }, t('common.loading'));
-  const extra = h('span', { class: 'summary-card__extra' });
-  slot.replaceChildren(h('a', { class: 'summary-card accent-indigo', href: '#/m/rooms' },
-    h('span', { class: 'summary-card__icon', 'aria-hidden': 'true' }, '🚪'),
-    h('span', { class: 'summary-card__body' },
-      h('span', { class: 'summary-card__title' }, t('module.rooms.name')),
-      h('span', { class: 'summary-card__figure' }, value, label),
-      extra)));
-
+  try { store = getRoomsStore(ctx); } catch { dd.textContent = '—'; return () => {}; }
+  const link = h('a', { class: 'text-link facts__count', href: '#/m/rooms', id: 'home-rooms-count' }, t('common.loading'));
+  dd.replaceChildren(link);
   return store.subscribe((snap) => {
-    if (snap.status === 'error') { value.textContent = '—'; label.textContent = t('rooms.widget.unavailable'); extra.textContent = ''; return; }
+    if (snap.status === 'error') { link.textContent = t('rooms.widget.unavailable'); return; }
     if (snap.status !== 'ready') return;
-    const { activeCount, archivedCount } = store.summary();
-    if (activeCount === 0) {
-      value.textContent = '';
-      label.textContent = t('rooms.widget.none');
-    } else {
-      value.textContent = formatNumber(activeCount);
-      label.textContent = tp('rooms.widget.activeLabel', activeCount);
-    }
-    extra.textContent = archivedCount ? tp('rooms.widget.archived', archivedCount) : '';
+    const { activeCount } = store.summary();
+    link.dataset.count = String(activeCount);
+    link.textContent = activeCount ? `${formatNumber(activeCount)} ${tp('rooms.widget.activeLabel', activeCount)}` : t('rooms.widget.none');
   });
 }
