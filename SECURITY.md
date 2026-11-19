@@ -350,3 +350,31 @@ All rows (plus the Rooms cases) are covered by `tests/rules/rules.test.mjs` (55 
 - **Presentation state is owner-only:** other members of the same Home can't read, list, write or delete it.
 - **No background delivery exists;** the UI says so explicitly.
 - **The data-layer `delete`** is restricted by a static test to reminder state; module collections keep `allow delete: if false`.
+
+## V6.4 Batch B: Shared Contacts
+
+| Action | Owner | Admin | Member | Viewer | Child | Non-member / other Home |
+|---|---|---|---|---|---|---|
+| Read live contacts and categories (`contacts.view`) | ✓ | ✓ | ✓ | ✓ | ✓ | ✗ |
+| Read soft-deleted contacts: direct get or query (`contacts.view` + `contacts.delete`) | ✓ | ✓ | ✗ | ✗ | ✗ | ✗ |
+| Add manually (`contacts.create`) | ✓ | ✓ | ✓ | ✗ | ✗ | ✗ |
+| Edit, change the shared favourite (`contacts.edit`) | ✓ | ✓ | ✓ | ✗ | ✗ | ✗ |
+| Import a `.vcf` (`contacts.import`) | ✓ | ✓ | ✓ | ✗ | ✗ | ✗ |
+| Export a `.vcf` (`contacts.export`, client-side) | ✓ | ✓ | ✓ | ✗ | ✗ | ✗ |
+| Soft delete / restore (`contacts.delete`) | ✓ | ✓ | ✗ | ✗ | ✗ | ✗ |
+| Create / rename / remove categories (`contacts.manageCategories`) | ✓ | ✓ | ✗ | ✗ | ✗ | ✗ |
+| Hard delete a contact | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ |
+
+- **Household isolation:** every rule is under `homes/{h}` and gated by `can(h, 'contacts', …)` (active membership + role grant). There is no root collection.
+- **Strict shape:** exact keys; every string is length-bounded; numbers and labels are validated by regex, so the stored value can never be a `javascript:` / markup payload. Names and notes are free text and are rendered with `textContent` only.
+- **Audit:** `createdBy` / `updatedBy` / `deletedBy` must be the caller; `createdAt` / `updatedAt` / `deletedAt` must be the server time; `createdBy`, `createdAt`, `source` and `schemaVersion` are immutable.
+- **Deleted contacts are hidden (rev 2):** the read rule is `can(view) && (resource == null || resource.data.deleted == false || can(delete))`. A get of a missing id reveals nothing. A deleted id is unreadable, so an importer without delete rights only learns "it exists, hidden" and nothing about its content.
+- **Import idempotency (rev 2):**
+  - Creates use a deterministic id (copy 0). A `set` on an existing id is evaluated as an update, and `rev == 1` can never equal `resource.rev + 1`, so it is always refused.
+  - The client then reads the document and reports **already** (identical import), **kept** (changed since), **deleted** (not restored) or **hidden**.
+  - A new copy id is used only for an explicit **Keep separate** or **Add as separate**.
+- **No silent overwrite:** every update is `rev + 1`. A stale editor or a merge confirmed against an older revision is refused and the user re-confirms. Imports are create-only (an existing id is never overwritten).
+- **Export is a separate right.** Viewing contacts does not let a viewer or child download the whole directory. The export happens in the browser after a personal-information warning. Nothing leaves the device otherwise.
+- **Import:** parsed in the browser (≤ 1 MB, ≤ 500 records, bounded lines). Nothing is written before the user confirms the preview. Photos and other media are discarded.
+- **Dialer and WhatsApp:** `tel:` links and `https://wa.me/<digits>` are built only from validated numbers. A national number asks for a country code (never guessed). WhatsApp opens with `noopener,noreferrer`.
+- **Existing Homes:** the owner (`*`) has everything at once. Admins and members get import / export / category management after the owner uses **Update default roles** (template v9, additive: custom grants are kept).

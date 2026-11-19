@@ -154,7 +154,7 @@ await check('A7 dashboard: correct home, user, owner role, coming-soon tools + F
   assert.match(t, /Abdo Adel/);
   assert.match(t, /المالك/);
   // Phase 5.3: Cleaning; Phase 5.5: Maintenance — 5 planned tiles remain.
-  assert.equal(await page.locator('.tile--planned').count(), 4);   // V6.1: Recipes implemented
+  assert.equal(await page.locator('.tile--planned').count(), 3);   // V6.1: Recipes implemented; V6.4 B: Contacts implemented
   assert.equal(await page.locator('.tile:not(.tile--planned)[href="#/m/expenses"]').count(), 1);
   assert.equal(await page.locator('.tile:not(.tile--planned)[href="#/m/rooms"]').count(), 1);
   assert.equal(await page.locator('.tile:not(.tile--planned)[href="#/m/devices"]').count(), 1);
@@ -478,7 +478,7 @@ await check('D1 dashboard: Your Home card shows devices (empty) + Devices in nav
   await page.locator('#home-rooms-count[data-count]').waitFor();
   assert.equal(await page.locator('.summary-card[href="#/m/devices"], .summary-card[href="#/m/rooms"]').count(), 0);
   assert.equal(await page.locator('.rail a[href="#/m/devices"]').count(), 1);
-  assert.equal(await page.locator('.tile--planned').count(), 4, 'V6.1: 4 planned (Cleaning, Maintenance, Recipes implemented)');
+  assert.equal(await page.locator('.tile--planned').count(), 3, 'V6.4 B: 3 planned (Cleaning, Maintenance, Recipes, Contacts implemented)');
 });
 
 await check('D2 Devices empty state with 6 templates; nothing written', async () => {
@@ -2721,7 +2721,7 @@ await check('L1–L3 legacy home: creator signs in → specific upgrade screen (
   assert.ok(!Object.keys(d).some((k) => k.startsWith(`homes/${LEGACY}/members/`) || k.startsWith(`homes/${LEGACY}/roles/`)), 'detection wrote nothing');
 });
 
-await check('L4 upgrade → automatic re-resolution to the SAME home: owner membership + five v8 roles, data untouched', async () => {
+await check('L4 upgrade → automatic re-resolution to the SAME home: owner membership + five v9 roles, data untouched', async () => {
   await page.click('#legacy-upgrade');
   await page.locator('.hero__home').waitFor();
   assert.match(await page.locator('.hero__home').innerText(), /Old Adel Home/);
@@ -2729,7 +2729,7 @@ await check('L4 upgrade → automatic re-resolution to the SAME home: owner memb
   const m = d[`homes/${LEGACY}/members/UID_OWNER`];
   assert.deepEqual([m.roleId, m.status, m.legacyAdoption, m.addedBy], ['owner', 'active', true, 'UID_OWNER']);
   assert.deepEqual(Object.keys(d).filter((k) => k.startsWith(`homes/${LEGACY}/roles/`)).map((k) => k.split('/').pop()).sort(), ['admin', 'child', 'member', 'owner', 'viewer']);
-  assert.deepEqual([d[`homes/${LEGACY}/roles/owner`].permissions, d[`homes/${LEGACY}/roles/owner`].rank, d[`homes/${LEGACY}/roles/owner`].templateVersion], [['*'], 100, 8]);   // current template v8 (V6.2)
+  assert.deepEqual([d[`homes/${LEGACY}/roles/owner`].permissions, d[`homes/${LEGACY}/roles/owner`].rank, d[`homes/${LEGACY}/roles/owner`].templateVersion], [['*'], 100, 9]);   // current template v9 (V6.4 B contacts)
   assert.equal(d['users/UID_OWNER'].defaultHomeId, LEGACY, 'defaultHomeId unchanged');
   assert.equal(await legacyBusiness(LEGACY), globalThis.__legacyBefore, 'home doc + devices + expenses + savings byte-identical');
   assert.equal(Object.keys(d).filter((k) => /^homes\/[^/]+$/.test(k) && d[k].name === 'Old Adel Home').length, 1, 'no second home');
@@ -3777,6 +3777,210 @@ await check('V640-A Batch A: post-reset routine has no "no longer active" rows (
 // B0 regression (must stay LAST on the main page: it freezes the browser clock). Advanced must wait for
 // the stored settings before choosing the routine day, and must never pair / create a routine for a
 // different day than the one it shows (race found while closing B0; see B0-CLOSURE-REPORT.md).
+// =================================================================== V6.4 Batch B — Shared Contacts
+await check('V640-B Contacts: dock + Tools entry · add (Arabic, labelled phones, category) · search (Arabic / any number format) · tel: + WhatsApp (asks country code) · edit rev + favourite filter · VCF 2.1/3.0/4.0 import preview (new / duplicate / in-file / invalid; skip default; merge) · failure + retry without duplicates · export warning + VCF 3.0 CRLF · delete / restore · viewer read-only · 320–412, RTL, dark · rev 2: imported-before status, re-import after delete (not restored, explicit separate), capacity + truncation', async () => {
+  await ensureSignedOut();
+  const H = 'hV64B'; const err0 = page.errors.length;
+  await page.evaluate(async (h) => {
+    const { defaultRoles } = await import('/src/modules/index.js');
+    const now = new Date().toISOString();
+    window.__fake.set(`homes/${h}`, { name: 'Contacts Home', createdBy: 'UID_OWNER', currency: 'EGP', timezone: 'UTC', language: 'en' });
+    for (const r of defaultRoles()) window.__fake.set(`homes/${h}/roles/${r.id}`, { name: r.name, rank: r.rank, permissions: r.permissions, system: true, templateVersion: 9 });
+    window.__fake.set(`homes/${h}/members/UID_OWNER`, { uid: 'UID_OWNER', email: 'owner@example.com', displayName: 'Abdo', roleId: 'owner', status: 'active', joinedAt: now });
+    window.__fake.set(`homes/${h}/members/UID_MONA`, { uid: 'UID_MONA', email: 'mona@example.com', displayName: 'Mona', roleId: 'viewer', status: 'active', joinedAt: now });
+    const C = (name, phones, x = {}) => ({ name, organization: null, email: null, address: null, notes: null, favorite: false, phones, categoryIds: [], source: 'manual', deleted: false, deletedAt: null, deletedBy: null, rev: 1, createdBy: 'UID_OWNER', createdAt: now, updatedBy: 'UID_OWNER', updatedAt: now, schemaVersion: 1, ...x });
+    window.__fake.set(`homes/${h}/contacts/seedPlumber1`, C('Hassan Plumber', ['mobile|+20 122 333 4444']));
+    window.__fake.set(`homes/${h}/contacts/seedGone0001`, C('Old Driver', ['mobile|0111 000 0000'], { deleted: true, deletedAt: now, deletedBy: 'UID_OWNER', rev: 2 }));
+    window.__fake.patch('users/UID_OWNER', { defaultHomeId: h, language: 'en', displayName: 'Abdo' });
+    window.__fake.patch('users/UID_MONA', { defaultHomeId: h, language: 'en', displayName: 'Mona' });
+  }, H);
+  const docs = () => page.evaluate((h) => Object.entries(window.__fake.dump()).filter(([k]) => k.startsWith(`homes/${h}/contacts/`)).map(([k, v]) => ({ id: k.split('/').pop(), ...v })), H);
+  const noOverflow = async (what) => assert.ok((await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)) <= 0, `${what}: no page-level horizontal overflow`);
+  const submit = async () => { await page.click('dialog[open] button[type=submit]'); await page.locator('dialog[open]').waitFor({ state: 'detached' }); };
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await login('owner@example.com'); await page.locator('.hero__home').waitFor();
+
+  // ---- entry points: Tools tile (implemented, not planned) and the mobile dock
+  await page.locator('.card--tools a.tile[href="#/m/contacts"]:not(.tile--planned)').waitFor();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.locator('.dock .nav-link[href="#/m/contacts"]').click();
+  await page.locator('#ct-list .ct-card').first().waitFor();
+  assert.equal(await page.locator('#ct-list .ct-card').count(), 1, 'deleted contacts are not listed');
+  assert.match(await page.locator('#ct-count').innerText(), /1 of 1/);
+
+  // ---- categories: suggested set (idempotent)
+  await page.click('#ct-cats'); await page.click('#ct-cat-suggest'); await page.locator('#ct-cat-list li').nth(9).waitFor();
+  await page.click('#ct-cat-suggest'); await page.waitForTimeout(300);
+  assert.equal(await page.locator('#ct-cat-list li').count(), 10, 'suggestions added once');
+  await page.click('#ct-cats-back');
+
+  // ---- add: Arabic name, national mobile + custom-labelled landline, a category
+  await page.click('#ct-new'); await page.locator('#ct-form').waitFor();
+  await page.fill('#ct-f-name', 'د. أحمد عبد الله');
+  await page.locator('.ct-edit-phone [data-role=number]').first().fill('٠١٠٠ ١٢٣ ٤٥٦٧');
+  await page.click('#ct-add-phone');
+  await page.locator('.ct-edit-phone').nth(1).locator('[data-role=label]').selectOption('__custom');
+  await page.locator('.ct-edit-phone').nth(1).locator('[data-role=custom]').fill('Clinic desk');
+  await page.locator('.ct-edit-phone').nth(1).locator('[data-role=number]').fill('(02) 2345-6789');
+  await page.check('#ct-form input[name=ct-cat][value=s_doctors]');
+  await submit();
+  await page.locator('#ct-detail').waitFor();
+  const ahmed = (await docs()).find((d) => d.name === 'د. أحمد عبد الله');
+  assert.deepEqual([ahmed.phones, ahmed.categoryIds, ahmed.rev, ahmed.source, ahmed.createdBy], [['mobile|0100 123 4567', 'Clinic desk|(02) 2345-6789'], ['s_doctors'], 1, 'manual', 'UID_OWNER']);
+  // ---- tel: and WhatsApp (national number → asks the country code; never guessed)
+  assert.equal(await page.getAttribute('#ct-call-0', 'href'), 'tel:01001234567');
+  assert.equal(await page.getAttribute('#ct-call-1', 'href'), 'tel:0223456789');
+  await page.evaluate(() => { window.__opened = []; window.open = (u, n, f) => { window.__opened.push([u, n, f]); return null; }; });
+  assert.equal(await page.getAttribute('#ct-wa-0', 'data-need-country'), 'true');
+  await page.click('#ct-wa-0'); await page.locator('#ct-wa-form').waitFor();
+  await page.fill('#ct-wa-cc', '20'); await page.locator('#ct-wa-preview', { hasText: '201001234567' }).waitFor();
+  await submit();
+  assert.deepEqual(await page.evaluate(() => window.__opened), [['https://wa.me/201001234567', '_blank', 'noopener,noreferrer']]);
+  // ---- edit (revision), favourite
+  await page.click('#ct-edit'); await page.fill('#ct-f-org', 'Nile Clinic'); await submit();
+  await page.waitForFunction((h) => Object.entries(window.__fake.dump()).some(([k, v]) => k.startsWith(`homes/${h}/contacts/`) && v.organization === 'Nile Clinic' && v.rev === 2), H);
+  await page.click('#ct-back');
+  await page.locator('.ct-card:has-text("أحمد") [data-action=favorite]').click();
+  await page.locator('.ct-card:has-text("أحمد") [data-action=favorite][aria-pressed=true]').waitFor();
+  assert.match(await page.locator('#ct-list .ct-card').first().innerText(), /أحمد/, 'favourites first');
+  await page.click('#ct-fav-filter'); assert.equal(await page.locator('#ct-list .ct-card').count(), 1); await page.click('#ct-fav-filter');
+  // ---- search: Arabic without diacritics / hamza, any number format, category label, organization
+  for (const [q, n] of [['احمد', 1], ['+20 100 123 4567', 1], ['1234567', 1], ['doctors', 1], ['nile', 1], ['plumber', 1], ['zzzz', 0]]) {
+    await page.fill('#ct-search', q); assert.equal(await page.locator('#ct-list .ct-card').count(), n, `search "${q}"`);
+  }
+  assert.equal(await page.locator('#ct-empty').isVisible(), true); await page.fill('#ct-search', '');
+  await page.selectOption('#ct-cat', 's_doctors'); assert.equal(await page.locator('#ct-list .ct-card').count(), 1); await page.selectOption('#ct-cat', 'all');
+
+  // ---- import: 2.1 QP Arabic (new) · 3.0 duplicate of Hassan (same number) · 4.0 new · in-file repeat · invalid (no name) · hostile text kept as text
+  const vcf = [
+    'BEGIN:VCARD\r\nVERSION:2.1\r\nN;CHARSET=UTF-8;ENCODING=QUOTED-PRINTABLE:=D8=B3=D8=A7=D8=B1=D8=A9;\r\nTEL;CELL:+20 155 000 1111\r\nPHOTO;ENCODING=BASE64;TYPE=JPEG:/9j/4AAQ\r\n\r\nEND:VCARD',
+    'BEGIN:VCARD\nVERSION:3.0\nFN:Hassan P.\nTEL;TYPE=CELL:0122 333 4444\nORG:Pipes Co\nEND:VCARD',
+    'BEGIN:VCARD\r\nVERSION:4.0\r\nFN:<img src=x onerror=alert(1)>\r\nTEL;VALUE=uri;TYPE=voice:tel:+1-555-555-0100\r\nCATEGORIES:Emergency\r\nEND:VCARD',
+    'BEGIN:VCARD\nVERSION:3.0\nFN:Sara Again\nTEL:+20 155 000 1111\nEND:VCARD',
+    'BEGIN:VCARD\nVERSION:3.0\nTEL:0100\nEND:VCARD',
+  ].join('\r\n');
+  await page.click('#ct-import');
+  await page.setInputFiles('#ct-imp-file', { name: 'phone.vcf', mimeType: 'text/vcard', buffer: Buffer.from(vcf) });
+  await page.locator('#ct-imp-preview').waitFor();
+  assert.deepEqual(await page.locator('#ct-imp-list .ct-imp-item').evaluateAll((els) => els.map((e) => e.dataset.status)), ['new', 'duplicate', 'new', 'inFile', 'invalid']);
+  assert.match(await page.locator('#ct-imp-counts').innerText(), /2 new · 0 imported before · 1 duplicate · 0 possible duplicate · 0 ambiguous · 1 repeated in file · 1 invalid — 2 selected/);
+  assert.equal(await page.locator('#ct-imp-act-1').inputValue(), 'skip', 'duplicates are skipped by default');
+  assert.equal(await page.locator('#ct-imp-act-4').isDisabled(), true, 'invalid rows can only be skipped');
+  assert.match(await page.locator('.ct-imp-item[data-index="0"]').innerText(), /سارة/);
+  assert.equal(await page.locator('#ct-imp-list img').count(), 0, 'markup in a vCard is shown as text');
+  assert.equal(await page.evaluate((h) => Object.keys(window.__fake.dump()).filter((k) => k.startsWith(`homes/${h}/contacts/vc_`)).length, H), 0, 'preview writes nothing');
+  await page.selectOption('#ct-imp-act-1', 'merge');
+  await page.evaluate(() => { window.__fakeFailNextCommit = true; });       // the first write fails (network / server)
+  await page.click('#ct-imp-confirm'); await page.locator('#ct-imp-result').waitFor();
+  assert.match(await page.locator('#ct-imp-result').innerText(), /1 added · 1 merged · 0 already there · 0 unchanged · 0 changed since the preview · 1 failed/);
+  await page.click('#ct-imp-retry'); await page.locator('#ct-imp-result:not(:has(#ct-imp-retry))').waitFor();
+  assert.match(await page.locator('#ct-imp-result').innerText(), /1 added · 0 merged · 0 already there/);
+  let all = await docs();
+  assert.equal(all.filter((d) => d.name === 'سارة').length, 1, 'no duplicate after retry');
+  assert.equal(all.filter((d) => /onerror/.test(d.name)).length, 1);
+  assert.deepEqual(all.find((d) => d.id === 'seedPlumber1'), { ...all.find((d) => d.id === 'seedPlumber1'), name: 'Hassan Plumber', organization: 'Pipes Co', phones: ['mobile|+20 122 333 4444'], rev: 2 }, 'merge filled the empty field, kept the name and number');
+  assert.deepEqual(all.find((d) => d.name === 'سارة').phones, ['mobile|+20 155 000 1111'], 'imported numbers saved');
+  assert.ok(all.filter((d) => d.source === 'vcf').every((d) => /^vc_[0-9a-f]{16}$/.test(d.id)));
+  // the same file again → everything is recognised (deterministic ids / duplicates), nothing new
+  await page.click('#ct-imp-other'); await page.setInputFiles('#ct-imp-file', { name: 'phone.vcf', mimeType: 'text/vcard', buffer: Buffer.from(vcf) });
+  await page.locator('#ct-imp-preview').waitFor();
+  // rev 2: the two records created by the first import are recognised by their import id ("imported before"),
+  // the merged one as a duplicate — nothing selected, nothing written
+  assert.match(await page.locator('#ct-imp-counts').innerText(), /0 new · 2 imported before · 1 duplicate/);
+  assert.equal(await page.locator('#ct-imp-confirm').isDisabled(), true);
+  assert.equal(await page.locator('.ct-imp-item[data-status=imported] select option[value=create]').count(), 0, 'no plain create for an imported record');
+  // malformed / non-vCard file
+  await page.click('#ct-imp-other'); await page.setInputFiles('#ct-imp-file', { name: 'notes.vcf', mimeType: 'text/vcard', buffer: Buffer.from('just some text') });
+  await page.locator('#ct-imp-error').waitFor();
+  await page.click('#ct-imp-back'); await page.locator('#ct-list').waitFor();
+  assert.equal((await docs()).filter((d) => !d.deleted).length, 4);
+
+  // ---- export: scope → personal-information warning → VCF 3.0 (UTF-8, CRLF)
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.click('#ct-export'); await page.selectOption('#ct-export-scope', 's_doctors'); await page.click('dialog[open] button[type=submit]');   // the warning opens as the scope dialog closes
+  await page.locator('dialog[open][role=alertdialog]').waitFor();
+  assert.match(await page.locator('dialog[open]').innerText(), /Export 1 contact/);
+  const dl = page.waitForEvent('download'); await page.click('dialog[open] .btn--primary'); const file = await dl;
+  const text = readFileSync(await file.path(), 'utf8');
+  assert.ok(file.suggestedFilename().endsWith('.vcf'));
+  assert.match(text, /^BEGIN:VCARD\r\nVERSION:3\.0\r\n/); assert.ok(!/[^\r]\n/.test(text), 'CRLF line endings');
+  assert.match(text, /FN:د\. أحمد عبد الله\r\n/); assert.match(text, /X-HOMEHUB-LABEL:Clinic desk/); assert.match(text, /CATEGORIES:Doctors/);
+  assert.equal((text.match(/BEGIN:VCARD/g) || []).length, 1, 'category scope only');
+
+  // ---- delete (soft) → recently deleted → restore
+  await page.locator('.ct-card:has-text("onerror") .ct-card__open').click(); await page.click('#ct-delete');
+  await page.click('dialog[open] .btn--danger'); await page.locator('#ct-list').waitFor();
+  assert.equal(await page.locator('#ct-list .ct-card:has-text("onerror")').count(), 0);
+  await page.click('#ct-deleted'); await page.locator('#ct-del-list li').nth(1).waitFor();
+  await page.locator('#ct-del-list li:has-text("onerror") [data-action=restore]').click();
+  await page.locator('#ct-del-list li:has-text("onerror")').waitFor({ state: 'detached' });
+  await page.click('#ct-del-back');
+  assert.equal(await page.locator('#ct-list .ct-card').count(), 4);
+  // rev 2: re-import after a soft delete → reported, NOT restored, NOT copied (until the user explicitly asks)
+  await page.locator('.ct-card:has-text("onerror") .ct-card__open').click(); await page.click('#ct-delete');
+  await page.click('dialog[open] .btn--danger'); await page.locator('#ct-list').waitFor();
+  const snapBefore = JSON.stringify(await docs());
+  await page.click('#ct-import'); await page.setInputFiles('#ct-imp-file', { name: 'phone.vcf', mimeType: 'text/vcard', buffer: Buffer.from(vcf) });
+  await page.locator('#ct-imp-preview').waitFor();
+  assert.equal(await page.locator('.ct-imp-item[data-index="2"]').getAttribute('data-status'), 'new', 'the deleted contact is not in the live directory');
+  await page.click('#ct-imp-confirm'); await page.locator('#ct-imp-result').waitFor();
+  assert.match(await page.locator('#ct-imp-deleted').innerText(), /imported before and later deleted — not restored: <img src=x onerror=alert\(1\)>/);
+  assert.equal(JSON.stringify(await docs()), snapBefore, 'nothing written');
+  await page.click('#ct-imp-separate'); await page.locator('#ct-imp-result:not(:has(#ct-imp-separate))').waitFor();
+  all = await docs();
+  assert.deepEqual([all.filter((d) => /onerror/.test(d.name) && !d.deleted).length, all.filter((d) => /onerror/.test(d.name) && d.deleted).length], [1, 1], 'explicit "add as separate": a new contact; the deleted one stays deleted');
+  await page.click('#ct-imp-back'); await page.locator('#ct-list').waitFor();
+  assert.match(await page.locator('#ct-capacity').innerText(), /^4 of 1000 contacts$/);
+
+  // ---- layout: 320 / 360 / 412, RTL + dark
+  for (const w of [320, 360, 412]) { await page.setViewportSize({ width: w, height: 760 }); await page.waitForTimeout(100); await noOverflow(`contacts ${w}`); }
+  await page.locator('.ct-card:has-text("أحمد") .ct-card__open').click(); await page.locator('#ct-detail').waitFor(); await noOverflow('detail 320');
+  await shot(page, '80-v640b-contact-detail-412');
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.click('.topbar__actions .chip-btn:not(.chip-btn--icon)'); await page.waitForFunction(() => document.documentElement.dir === 'rtl');
+  await page.evaluate(() => { document.documentElement.dataset.theme = 'dark'; });
+  await page.setViewportSize({ width: 360, height: 760 });
+  await page.goto(BASE + '#/m/contacts'); await page.locator('#ct-list .ct-card').first().waitFor();
+  assert.notEqual(await page.locator('#ct-new').innerText(), '＋ New contact', 'Arabic UI');
+  assert.notEqual(await page.locator('#ct-search').getAttribute('placeholder'), 'Search name, number or organization', 'Arabic UI');
+  await noOverflow('contacts RTL dark 360');
+  await shot(page, '81-v640b-contacts-ar-dark-360');
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.click('.topbar__actions .chip-btn:not(.chip-btn--icon)'); await page.waitForFunction(() => document.documentElement.dir === 'ltr');
+  await page.evaluate(() => { document.documentElement.dataset.theme = 'light'; });
+
+  // ---- viewer: reads the shared directory; no add / import / export / delete / favourite controls
+  await logout(); await login('mona@example.com'); await page.locator('.hero__home').waitFor();
+  await page.goto(BASE + '#/m/contacts'); await page.locator('#ct-list .ct-card').first().waitFor();
+  assert.equal(await page.locator('#ct-list .ct-card').count(), 4, 'same shared contacts');
+  for (const id of ['#ct-new', '#ct-import', '#ct-export', '#ct-cats', '#ct-deleted']) assert.equal(await page.locator(id).count(), 0, `viewer: no ${id}`);
+  assert.equal(await page.locator('#ct-list button[data-action=favorite]').count(), 0, 'viewer cannot change shared favourites');
+  await page.locator('.ct-card:has-text("أحمد") .ct-card__open').click();
+  assert.equal(await page.getAttribute('#ct-call-0', 'href'), 'tel:01001234567', 'viewer can call');
+  for (const id of ['#ct-edit', '#ct-delete', '#ct-export-one']) assert.equal(await page.locator(id).count(), 0, `viewer: no ${id}`);
+  await logout();
+
+  // ---- rev 2 (B3): more than the capacity → truncation is shown, never presented as complete; import paused
+  await page.evaluate((h) => {
+    const now = new Date().toISOString();
+    for (let i = 0; i < 1000; i++) window.__fake.set(`homes/${h}/contacts/bulk${String(i).padStart(5, '0')}`, { name: `Bulk ${i}`, organization: null, email: null, address: null, notes: null, favorite: false, phones: [], categoryIds: [], source: 'manual', deleted: false, deletedAt: null, deletedBy: null, rev: 1, createdBy: 'UID_OWNER', createdAt: now, updatedBy: 'UID_OWNER', updatedAt: now, schemaVersion: 1 });
+  }, H);
+  await login('owner@example.com'); await page.locator('.hero__home').waitFor();
+  await page.goto(BASE + '#/m/contacts'); await page.locator('#ct-truncated').waitFor();
+  assert.match(await page.locator('#ct-truncated').innerText(), /more than 1000 contacts\. Only 1000 are loaded/);
+  assert.match(await page.locator('#ct-capacity').innerText(), /More than 1000 contacts — only 1000 loaded/);
+  assert.match(await page.locator('#ct-count').innerText(), /the directory has more/);
+  assert.equal(await page.locator('#ct-import').isDisabled(), true); assert.equal(await page.locator('#ct-new').isDisabled(), true);
+  assert.equal(await page.locator('#ct-list .ct-card').count(), 1000);
+  await page.click('#ct-export'); await page.locator('#ct-export-scope').waitFor(); await page.click('dialog[open] button[type=submit]');
+  await page.locator('dialog[open][role=alertdialog]').waitFor();
+  assert.match(await page.locator('dialog[open]').innerText(), /Incomplete: only the first 1000 loaded contacts/);
+  await page.click('dialog[open] .btn--secondary'); await page.locator('dialog[open]').waitFor({ state: 'detached' });
+  await logout();
+  await page.evaluate((h) => { for (let i = 0; i < 1000; i++) window.__fake.remove(`homes/${h}/contacts/bulk${String(i).padStart(5, '0')}`); }, H);
+  assert.equal(page.errors.length, err0, `no page errors: ${page.errors.slice(err0).join(' | ')}`);
+});
+
 await check('ADV-NIGHT routine day honours stored startHour during 00:00–03:00; no wrong-day or duplicate routine on a new session', async () => {
   await ensureSignedOut();
   const H = 'hAdvNight';

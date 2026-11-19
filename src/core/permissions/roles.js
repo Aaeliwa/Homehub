@@ -12,7 +12,8 @@ import { isPermissionId } from './permission-format.js';
  * Homes whose system roles carry an older templateVersion are offered an update by the
  * owner in Settings. No silent rewrites.
  */
-export const ROLE_TEMPLATE_VERSION = 8;   // v8 (V6.2): + calendar.* (additive)
+export const ROLE_TEMPLATE_VERSION = 9;   // v9 (V6.4 B): + contacts.import / export / manageCategories (additive)
+// v8   // v8 (V6.2): + calendar.* (additive)
 // v7   // v7 (V6 batch 3): expenses.manageBudgets → owner / admin only
 
 /**
@@ -28,14 +29,14 @@ export const ROLE_TEMPLATE_VERSION = 8;   // v8 (V6.2): + calendar.* (additive)
  * replaces only grants in namespaces changed by versions > k, and keeps every other
  * grant — including any customised by hand. See upgradeRolePermissions().
  */
-export const TEMPLATE_CHANGES = Object.freeze({ 2: Object.freeze(['rooms']), 3: Object.freeze(['devices']), 4: Object.freeze(['expenses']), 5: Object.freeze(['members']), 6: Object.freeze(['savings']), 7: Object.freeze(['expenses']) , 8: Object.freeze(['calendar']) });
+export const TEMPLATE_CHANGES = Object.freeze({ 2: Object.freeze(['rooms']), 3: Object.freeze(['devices']), 4: Object.freeze(['expenses']), 5: Object.freeze(['members']), 6: Object.freeze(['savings']), 7: Object.freeze(['expenses']) , 8: Object.freeze(['calendar']), 9: Object.freeze(['contacts']) });
 
 /**
  * Versions whose namespace change is purely ADDITIVE (new default grants only). For these the
  * upgrade unions the new defaults into the role and never removes anything — so custom grants
  * inside that namespace survive too. v5 (Phase 4A) only adds members.manageChildren.
  */
-export const ADDITIVE_VERSIONS = Object.freeze([5, 7, 8]);
+export const ADDITIVE_VERSIONS = Object.freeze([5, 7, 8, 9]);
 /**
  * v7 (V6 batch 3): precise REVOCATIONS — removed only from roles whose current template no longer
  * grants them (members lose manageBudgets; admins keep it). Everything else, custom grants included, is kept.

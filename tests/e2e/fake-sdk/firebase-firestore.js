@@ -13,7 +13,9 @@ export function serverTimestamp() { return SENTINEL; }
 export function collection(db, ...segs) { return { type: 'collection', path: join(segs) }; }
 // Phase 4: single-constraint queries (== and array-contains), as used by the finance store.
 export function where(field, op, value) { return { field, op, value }; }
-export function query(col, w) { return { type: 'query', path: col.path, where: w }; }
+// V6.4 B: query(col, where?, limit?) — constraints in any order (contacts use where + limit).
+export function limit(n) { return { limit: n }; }
+export function query(col, ...cs) { return { type: 'query', path: col.path, where: cs.find((c) => c && 'field' in c), limit: (cs.find((c) => c && 'limit' in c) || {}).limit }; }
 function matchesWhere(d, w) {
   if (!w) return true;
   const v = d[w.field]; // like Firestore: a missing field never matches
@@ -63,21 +65,32 @@ function checkRead(path) {
   }
 }
 
+function contactPerms(path) {
+  const user = currentUser(); const home = path.split('/')[1]; const m = state.db[`homes/${home}/members/${user.uid}`];
+  return ((m && state.db[`homes/${home}/roles/${m.roleId}`]) || {}).permissions || [];
+}
 export async function getDoc(ref) {
   await new Promise((r) => setTimeout(r, 20));
   checkRead(ref.path);
+  // V6.4 B rev 2 (mirrors firestore.rules): a soft-deleted contact is readable with contacts.delete only
+  if (/^homes\/[^/]+\/contacts\/[^/]+$/.test(ref.path) && state.db[ref.path] && state.db[ref.path].deleted === true) {
+    const perms = contactPerms(ref.path);
+    if (!(perms.includes('*') || perms.includes('contacts.*') || perms.includes('contacts.delete'))) throw err('permission-denied');
+  }
   return snap(ref.path);
 }
 export async function getDocs(col) {
   checkRead(col.path + '/x');
+  if (col.type === 'query') { checkQuery(col); return collectionSnap(col.path, col.where, col.limit); }
+  if (/\/(contacts|contactCategories)$/.test(col.path)) checkQuery({ path: col.path, where: null });
   const depth = col.path.split('/').length + 1;
   const docs = Object.keys(state.db).filter((p) => p.startsWith(col.path + '/') && p.split('/').length === depth).map(snap);
   return { docs };
 }
-function collectionSnap(path, w) {
+function collectionSnap(path, w, max) {
   const depth = path.split('/').length + 1;
   const docs = Object.keys(state.db).filter((p) => p.startsWith(path + '/') && p.split('/').length === depth && matchesWhere(state.db[p], w)).sort().map(snap);
-  return { docs };
+  return { docs: Number.isInteger(max) ? docs.slice(0, max) : docs };
 }
 /**
  * Query privacy, mirroring what firestore.rules allow for finance listeners, so the E2E
@@ -87,6 +100,16 @@ function collectionSnap(path, w) {
  */
 function checkQuery(q) {
   const user = currentUser();
+  // V6.4 B (mirrors firestore.rules): shared contacts / categories need contacts.view in THIS home.
+  if (/\/(contacts|contactCategories)$/.test(q.path)) {
+    const home = q.path.split('/')[1]; const m = state.db[`homes/${home}/members/${user.uid}`];
+    const perms = ((m && state.db[`homes/${home}/roles/${m.roleId}`]) || {}).permissions || [];
+    if (!(perms.includes('*') || perms.includes('contacts.*') || perms.includes('contacts.view'))) throw err('permission-denied');
+    // V6.4 B rev 2: contact queries not constrained to deleted == false need contacts.delete
+    const w0 = q.where || {};
+    if (/\/contacts$/.test(q.path) && !(w0.field === 'deleted' && w0.op === '==' && w0.value === false)
+      && !(perms.includes('*') || perms.includes('contacts.*') || perms.includes('contacts.delete'))) throw err('permission-denied');
+  }
   const w = q.where || {};
   if (w.field === 'readers' && (w.op !== 'array-contains' || w.value !== user.uid)) throw err('permission-denied');
   if ((w.field === 'audience' || w.field === 'visibility') && w.value === 'household') {
@@ -109,7 +132,7 @@ export function onSnapshot(ref, next, onError) {
       checkRead(isCol ? ref.path + '/x' : ref.path);
       if (ref.type === 'query') checkQuery(ref);
       else if (ref.type === 'collection') checkCollection(ref.path);
-      next(isCol ? collectionSnap(ref.path, ref.where) : snap(ref.path));
+      next(isCol ? collectionSnap(ref.path, ref.where, ref.limit) : snap(ref.path));
     }
     catch (e) { onError && onError(e); }
   };
@@ -153,9 +176,11 @@ export function writeBatch() {
       // Mirrors the rules: an expense id that already exists cannot be "created" again
       // (e.g. paying the same commitment due date twice).
       // Create-only collections (mirrors the rules): re-creating an existing doc is refused.
-      for (const [op, path] of ops) if (op === 'set' && /\/(expenses|cleaningTasks|cleaningOccurrences|cleaningLog|budgetAdjustments)\//.test(path) && state.db[path]) throw err('permission-denied');
-      // Mirrors the rules — deletes are allowed ONLY for owner-only reminder state (5.6) and cooking timers (V6.1).
-      for (const [op, path] of ops) if (op === 'delete' && !/\/(reminderStates|reminderPrefs|cookingTimers)\//.test(path)) throw err('permission-denied');
+      for (const [op, path] of ops) if (op === 'set' && /\/(expenses|cleaningTasks|cleaningOccurrences|cleaningLog|budgetAdjustments|contacts|contactCategories)\//.test(path) && state.db[path]) throw err('permission-denied');
+      // V6.4 B (mirrors the rules): a contact update must carry rev = stored rev + 1 (stale edits / merges refused).
+      for (const [op, path, data] of ops) if (op === 'update' && /\/contacts\//.test(path) && state.db[path] && data.rev !== state.db[path].rev + 1) throw err('permission-denied');
+      // Mirrors the rules — deletes are allowed ONLY for owner-only reminder state (5.6), cooking timers (V6.1) and contact categories (V6.4 B).
+      for (const [op, path] of ops) if (op === 'delete' && !/\/(reminderStates|reminderPrefs|cookingTimers|contactCategories)\//.test(path)) throw err('permission-denied');
       for (const [op, path, data] of ops) {
         if (op === 'delete') { delete state.db[path]; state.writes += 1; continue; }
         state.db[path] = op === 'set' ? resolveTs(data) : { ...state.db[path], ...resolveTs(data) };

@@ -1087,14 +1087,14 @@ test('L2/L4/L13 a different user cannot read or adopt someone else\'s legacy hom
   await assertFails(adoptionBatch(OWNER_A, { homeId: 'hA' }), 'creator of hL cannot adopt a different home');
 });
 
-test('L3/L16/L17/L18 the stored creator adopts: own owner membership + five current roles; owner = ["*"], v8', async () => {
+test('L3/L16/L17/L18 the stored creator adopts: own owner membership + five current roles; owner = ["*"], v9', async () => {
   await legacyHome();
   await assertSucceeds(getDoc(doc(db(OWNER_A), 'homes', 'hL')), 'creator may read own legacy home (detection)');
   await assertSucceeds(getDoc(doc(db(OWNER_A), 'homes', 'hL', 'roles', 'owner')), 'per-id role check for detection');
   await assertFails(getDocs(collection(db(OWNER_A), 'homes', 'hL', 'roles')), 'but no list');
   await assertSucceeds(adoptionBatch(OWNER_A));
   const owner = await getDoc(doc(db(OWNER_A), 'homes', 'hL', 'roles', 'owner'));
-  assert.deepEqual([owner.data().permissions, owner.data().rank, owner.data().templateVersion], [['*'], 100, 8]);   // current template (v8: V6.2)
+  assert.deepEqual([owner.data().permissions, owner.data().rank, owner.data().templateVersion], [['*'], 100, 9]);   // current template (v9: V6.4 B contacts)
   for (const r of ['admin', 'member', 'viewer', 'child']) assert.ok((await getDoc(doc(db(OWNER_A), 'homes', 'hL', 'roles', r))).exists(), r);
   await assertSucceeds(getDoc(doc(db(OWNER_A), 'homes', 'hL', 'devices', 'd1')), 'now a normal owner (L20 path)');
 });
@@ -2633,4 +2633,172 @@ test('V62-2 monthly budget: owner / admin only; exact shape; category keys bound
   await assertSucceeds(getDoc(mPath(db(MEMBER_WIFE), cur)), 'household member reads');
   await assertDenied(getDoc(mPath(db(CHILD_A), cur)), 'child (no expenses.view)');
   await assertDenied(getDoc(mPath(db(OWNER_HOME_B), cur)), 'cross-home');
+});
+
+// ---------------------------------------------------------------------------------------------- V6.4 B: Shared Contacts
+const cnPath = (f, id, h = 'hA') => doc(f, 'homes', h, 'contacts', id);
+const kcPath = (f, id, h = 'hA') => doc(f, 'homes', h, 'contactCategories', id);
+const cnDoc = (u, x = {}) => (asUser(u, 'cnDoc'), { name: 'Dr Ali', organization: null, email: null, address: null, notes: null, favorite: false,
+  phones: ['mobile|+20 100 555 6666'], categoryIds: [], source: 'manual', deleted: false, deletedAt: null, deletedBy: null, rev: 1,
+  createdBy: u.uid, createdAt: serverTimestamp(), updatedBy: u.uid, updatedAt: serverTimestamp(), schemaVersion: 1, ...x });
+const kcDoc = (u, x = {}) => (asUser(u, 'kcDoc'), { name: 'Plumbers', key: null, order: 0, rev: 1, createdBy: u.uid, createdAt: serverTimestamp(), updatedBy: u.uid, updatedAt: serverTimestamp(), schemaVersion: 1, ...x });
+const cnUp = (u, id, x) => updateDoc(cnPath(db(u), id), { ...x, updatedBy: u.uid, updatedAt: serverTimestamp() });
+async function contactsHome() { await family(); await seedMember('hA', MEMBER_WIFE, 'member'); await seedMember('hA', CHILD_A, 'child'); }
+
+test('V64B-1 contacts: read = contacts.view for every household role; unauthenticated, non-member, other Home, suspended denied', async () => {
+  await contactsHome();
+  await assertSucceeds(setDoc(cnPath(db(OWNER_A), 'ct0001'), cnDoc(OWNER_A)), 'owner creates');
+  for (const u of [OWNER_A, ADMIN_A, MEMBER_WIFE, VIEWER_A, CHILD_A]) {
+    await assertSucceeds(getDoc(cnPath(db(u), 'ct0001')), `${u.uid} reads`);
+    await assertSucceeds(getDocs(query(collection(db(u), 'homes', 'hA', 'contacts'), where('deleted', '==', false))), `${u.uid} lists`);
+  }
+  await assertDenied(getDoc(cnPath(anon(), 'ct0001')), 'unauthenticated');
+  await assertDenied(getDoc(cnPath(db(MALLORY), 'ct0001')), 'non-member');
+  await assertDenied(getDoc(cnPath(db(OWNER_HOME_B), 'ct0001')), 'owner of another Home');
+  await assertDenied(getDocs(collection(db(OWNER_HOME_B), 'homes', 'hA', 'contacts')), 'cross-home list');
+  await assertDenied(setDoc(cnPath(db(OWNER_HOME_B), 'ct0002'), cnDoc(OWNER_HOME_B)), 'cross-home create');
+  await assertDenied(getDoc(kcPath(db(MALLORY), 's_doctors')), 'non-member categories');
+  await assertDenied(getDocs(collection(db(MALLORY), 'contacts')), 'no root contacts collection');
+  await seedMember('hA', MEMBER_OTHER, 'member', 'suspended');
+  await assertDenied(getDoc(cnPath(db(MEMBER_OTHER), 'ct0001')), 'suspended member');
+});
+
+test('V64B-2 contacts: create / import permissions — member creates & imports; viewer and child cannot; source decides the permission', async () => {
+  await contactsHome();
+  await assertSucceeds(setDoc(cnPath(db(MEMBER_WIFE), 'ct0001'), cnDoc(MEMBER_WIFE)), 'member manual add');
+  await assertSucceeds(setDoc(cnPath(db(MEMBER_WIFE), 'vc_0123456789abcdef'), cnDoc(MEMBER_WIFE, { source: 'vcf' })), 'member import');
+  await assertDenied(setDoc(cnPath(db(MEMBER_WIFE), 'vc_0123456789abcdef'), cnDoc(MEMBER_WIFE, { source: 'vcf', name: 'Other' })), 'existing id: an import never overwrites (create-only)');
+  for (const u of [VIEWER_A, CHILD_A]) {
+    await assertDenied(setDoc(cnPath(db(u), `ct${u.uid}`), cnDoc(u)), `${u.uid} manual add`);
+    await assertDenied(setDoc(cnPath(db(u), `vc_${u.uid}`), cnDoc(u, { source: 'vcf' })), `${u.uid} import`);
+  }
+  await assertDenied(setDoc(cnPath(db(OWNER_A), 'ct0003'), cnDoc(OWNER_A, { source: 'sync' })), 'unknown source');
+  await assertSucceeds(setDoc(cnPath(db(ADMIN_A), 'ct0004'), cnDoc(ADMIN_A)), 'admin');
+});
+
+test('V64B-3 contacts: strict shape — exact keys, bounded strings, phone "label|number" format, email, categories, audit fields', async () => {
+  await contactsHome();
+  const O = OWNER_A; const bad = [
+    [{ extra: 1 }, 'unknown key'], [{ name: '' }, 'empty name'], [{ name: 'x'.repeat(121) }, 'name > 120'], [{ name: 5 }, 'name type'],
+    [{ notes: 'x'.repeat(1001) }, 'notes > 1000'], [{ organization: 'x'.repeat(121) }, 'org > 120'], [{ address: 'x'.repeat(301) }, 'address > 300'],
+    [{ email: 'not-an-email' }, 'email'], [{ email: 'a@b.c'.padStart(300, 'a') }, 'email > 254'],
+    [{ phones: ['+20 100 555 6666'] }, 'phone without label'], [{ phones: ['mobile|<script>'] }, 'phone number chars'], [{ phones: ['mob|ile|0100'] }, 'pipe in label'],
+    [{ phones: ['mobile|javascript:alert(1)'] }, 'URI as number'], [{ phones: ['mobile|' + '1'.repeat(41)] }, 'number > 40'], [{ phones: ['x'.repeat(31) + '|0100'] }, 'label > 30'],
+    [{ phones: Array.from({ length: 11 }, () => 'mobile|0100') }, '> 10 phones'], [{ phones: 'mobile|0100' }, 'phones type'],
+    [{ categoryIds: ['s_doctors', 's_doctors'] }, 'duplicate category'], [{ categoryIds: ['bad id!'] }, 'category id format'], [{ categoryIds: Array.from({ length: 11 }, (_, i) => `cat00${i}`) }, '> 10 categories'],
+    [{ favorite: 'yes' }, 'favorite type'], [{ deleted: true }, 'created deleted'], [{ rev: 2 }, 'rev starts at 1'], [{ createdBy: ADMIN_A.uid }, 'forged author'],
+    [{ updatedBy: ADMIN_A.uid }, 'forged editor'], [{ createdAt: new Date() }, 'client timestamp'], [{ schemaVersion: 2 }, 'schema version'],
+  ];
+  for (const [x, why] of bad) await assertDenied(setDoc(cnPath(db(O), 'ct0009'), cnDoc(O, x)), why);
+  await assertDenied(setDoc(cnPath(db(O), 'ab'), cnDoc(O)), 'id too short');
+  await assertSucceeds(setDoc(cnPath(db(O), 'ct0009'), cnDoc(O, { name: 'أحمد محمود 😀', organization: 'عيادة', email: 'x@y.eg', address: 'شارع النيل', notes: 'سطر\nسطر',
+    phones: ['mobile|+20 100 555 6666', 'Clinic desk|(02) 555-1234', 'whatsapp|0100#2'], categoryIds: ['s_doctors', 'cust_01'], favorite: true })), 'full Unicode contact');
+});
+
+test('V64B-4 contacts: edits — contacts.edit, rev + 1 (stale refused), immutable provenance; favourite is shared (edit permission)', async () => {
+  await contactsHome();
+  await assertSucceeds(setDoc(cnPath(db(OWNER_A), 'ct0001'), cnDoc(OWNER_A)));
+  await assertSucceeds(cnUp(MEMBER_WIFE, 'ct0001', { name: 'Dr Ali H', rev: 2 }), 'member edits');
+  await assertDenied(cnUp(ADMIN_A, 'ct0001', { name: 'Stale', rev: 2 }), 'stale revision refused');
+  await assertDenied(cnUp(ADMIN_A, 'ct0001', { name: 'Skip', rev: 4 }), 'revision skip refused');
+  await assertDenied(cnUp(VIEWER_A, 'ct0001', { favorite: true, rev: 3 }), 'viewer cannot favourite');
+  await assertDenied(cnUp(CHILD_A, 'ct0001', { name: 'x', rev: 3 }), 'child cannot edit');
+  await assertSucceeds(cnUp(MEMBER_WIFE, 'ct0001', { favorite: true, rev: 3 }), 'member favourites (shared)');
+  for (const [x, why] of [[{ createdBy: MEMBER_WIFE.uid }, 'createdBy'], [{ source: 'vcf' }, 'source'], [{ schemaVersion: 2 }, 'schemaVersion'], [{ createdAt: serverTimestamp() }, 'createdAt'], [{ phones: ['bad'] }, 'invalid content'], [{ extra: 1 }, 'new key']])
+    await assertDenied(cnUp(OWNER_A, 'ct0001', { ...x, rev: 4 }), `immutable / validated: ${why}`);
+  await assertDenied(updateDoc(cnPath(db(MEMBER_WIFE), 'ct0001'), { name: 'x', rev: 4, updatedBy: OWNER_A.uid, updatedAt: serverTimestamp() }), 'forged editor');
+  await assertDenied(cnUp(OWNER_HOME_B, 'ct0001', { name: 'x', rev: 4 }), 'cross-home edit');
+});
+
+test('V64B-5 contacts: soft delete / restore = contacts.delete only (admin); deleted contacts are read-only; no hard delete for anyone', async () => {
+  await contactsHome();
+  await assertSucceeds(setDoc(cnPath(db(OWNER_A), 'ct0001'), cnDoc(OWNER_A)));
+  const del = (u, rev, x = {}) => cnUp(u, 'ct0001', { deleted: true, deletedAt: serverTimestamp(), deletedBy: u.uid, rev, ...x });
+  await assertDenied(del(MEMBER_WIFE, 2), 'member lacks contacts.delete');
+  await assertDenied(del(VIEWER_A, 2), 'viewer');
+  await assertDenied(del(ADMIN_A, 2, { name: 'also renamed' }), 'delete changes only delete fields');
+  await assertDenied(del(ADMIN_A, 2, { deletedBy: OWNER_A.uid }), 'forged deleter');
+  await assertSucceeds(del(ADMIN_A, 2), 'admin soft-deletes');
+  await assertDenied(cnUp(OWNER_A, 'ct0001', { name: 'edit while deleted', rev: 3 }), 'deleted is read-only');
+  await assertSucceeds(getDocs(query(collection(db(ADMIN_A), 'homes', 'hA', 'contacts'), where('deleted', '==', true))), 'recently deleted list');
+  await assertDenied(cnUp(MEMBER_WIFE, 'ct0001', { deleted: false, deletedAt: null, deletedBy: null, rev: 3 }), 'member cannot restore');
+  await assertSucceeds(cnUp(OWNER_A, 'ct0001', { deleted: false, deletedAt: null, deletedBy: null, rev: 3 }), 'owner restores');
+  for (const u of [OWNER_A, ADMIN_A, MEMBER_WIFE]) await assertDenied(deleteDoc(cnPath(db(u), 'ct0001')), `${u.uid}: no hard delete`);
+});
+
+test('V64B-6 contact categories: contacts.manageCategories (owner/admin); suggested key ↔ id; bounded; rev + 1; delete leaves contacts intact', async () => {
+  await contactsHome();
+  await assertDenied(setDoc(kcPath(db(MEMBER_WIFE), 'cust01'), kcDoc(MEMBER_WIFE)), 'member cannot manage categories');
+  await assertDenied(setDoc(kcPath(db(VIEWER_A), 'cust01'), kcDoc(VIEWER_A)), 'viewer');
+  await assertSucceeds(setDoc(kcPath(db(ADMIN_A), 's_doctors'), kcDoc(ADMIN_A, { name: null, key: 'doctors' })), 'suggested');
+  await assertDenied(setDoc(kcPath(db(ADMIN_A), 's_plumbers'), kcDoc(ADMIN_A, { name: null, key: 'doctors' })), 'id must match the key');
+  await assertDenied(setDoc(kcPath(db(ADMIN_A), 's_hackers'), kcDoc(ADMIN_A, { name: null, key: 'hackers' })), 'unknown suggestion key');
+  await assertDenied(setDoc(kcPath(db(ADMIN_A), 'cust02'), kcDoc(ADMIN_A, { name: null })), 'custom needs a name');
+  for (const [x, why] of [[{ name: 'x'.repeat(41) }, 'name > 40'], [{ order: 1000 }, 'order bound'], [{ order: -1 }, 'order ≥ 0'], [{ rev: 2 }, 'rev 1'], [{ extra: 1 }, 'exact keys'], [{ createdBy: OWNER_A.uid }, 'forged author']])
+    await assertDenied(setDoc(kcPath(db(ADMIN_A), 'cust03'), kcDoc(ADMIN_A, x)), why);
+  await assertSucceeds(setDoc(kcPath(db(ADMIN_A), 'cust01'), kcDoc(ADMIN_A, { name: 'سباكين' })), 'custom Arabic name');
+  await assertSucceeds(getDoc(kcPath(db(CHILD_A), 'cust01')), 'child reads categories');
+  const kUp = (u, x) => updateDoc(kcPath(db(u), 'cust01'), { ...x, updatedBy: u.uid, updatedAt: serverTimestamp() });
+  await assertDenied(kUp(ADMIN_A, { name: 'Plumbers', rev: 3 }), 'rev + 1');
+  await assertDenied(kUp(ADMIN_A, { key: 'doctors', rev: 2 }), 'key immutable');
+  await assertDenied(kUp(MEMBER_WIFE, { name: 'Plumbers', rev: 2 }), 'member rename');
+  await assertSucceeds(kUp(ADMIN_A, { name: 'Plumbers', rev: 2 }), 'admin rename');
+  await assertSucceeds(setDoc(cnPath(db(OWNER_A), 'ct0001'), cnDoc(OWNER_A, { categoryIds: ['cust01'] })));
+  await assertDenied(deleteDoc(kcPath(db(MEMBER_WIFE), 'cust01')), 'member delete');
+  await assertDenied(deleteDoc(kcPath(db(OWNER_HOME_B), 'cust01')), 'cross-home delete');
+  await assertSucceeds(deleteDoc(kcPath(db(ADMIN_A), 'cust01')), 'admin delete');
+  await assertSucceeds(getDoc(cnPath(db(OWNER_A), 'ct0001')), 'contact still there');
+});
+
+test('V64B-7 contacts: role template v9 refresh accepted; existing pre-v9 member keeps create/edit; owner "*" covers everything', async () => {
+  await contactsHome();
+  const roles = defaultRoles(); const member = roles.find((r) => r.id === 'member');
+  await assertSucceeds(updateDoc(doc(db(OWNER_A), 'homes', 'hA', 'roles', 'member'), { permissions: member.permissions, templateVersion: 9, updatedAt: serverTimestamp() }), 'owner applies template v9');
+  await assertSucceeds(setDoc(cnPath(db(MEMBER_WIFE), 'vc_aaaaaaaaaaaaaaaa'), cnDoc(MEMBER_WIFE, { source: 'vcf' })), 'member imports after refresh');
+});
+
+test('V64B-8 (rev 2) deleted contacts: only contacts.delete holders read them — direct gets, queries, custom roles, cross-household', async () => {
+  await contactsHome();
+  const CUSTOM_DEL = { uid: 'custDel', email: 'cd@a.test' }; const CUSTOM_VIEW = { uid: 'custView', email: 'cv@a.test' };
+  await env.withSecurityRulesDisabled(async (c) => {
+    const f = c.firestore();
+    await setDoc(doc(f, 'homes', 'hA', 'roles', 'archivist'), { name: 'Archivist', rank: 30, permissions: ['contacts.view', 'contacts.delete'], system: false, createdAt: new Date(), updatedAt: new Date() });
+    await setDoc(doc(f, 'homes', 'hA', 'roles', 'reader'), { name: 'Reader', rank: 20, permissions: ['contacts.view', 'contacts.create', 'contacts.edit', 'contacts.import'], system: false, createdAt: new Date(), updatedAt: new Date() });
+  });
+  await seedMember('hA', CUSTOM_DEL, 'archivist'); await seedMember('hA', CUSTOM_VIEW, 'reader');
+  await assertSucceeds(setDoc(cnPath(db(OWNER_A), 'live01'), cnDoc(OWNER_A)));
+  await assertSucceeds(setDoc(cnPath(db(OWNER_A), 'gone01'), cnDoc(OWNER_A, { name: 'Old driver' })));
+  await assertSucceeds(cnUp(ADMIN_A, 'gone01', { deleted: true, deletedAt: serverTimestamp(), deletedBy: ADMIN_A.uid, rev: 2 }), 'admin soft-deletes');
+  const col = (u) => collection(db(u), 'homes', 'hA', 'contacts');
+  const activeQ = (u) => getDocs(query(col(u), where('deleted', '==', false)));
+  const deletedQ = (u) => getDocs(query(col(u), where('deleted', '==', true)));
+  // holders of contacts.delete (owner '*', admin, custom role with delete)
+  for (const u of [OWNER_A, ADMIN_A, CUSTOM_DEL]) {
+    await assertSucceeds(getDoc(cnPath(db(u), 'gone01')), `${u.uid}: direct get of a deleted contact`);
+    await assertSucceeds(deletedQ(u), `${u.uid}: Recently deleted query`);
+    await assertSucceeds(getDocs(col(u)), `${u.uid}: unconstrained list`);
+  }
+  // contacts.view WITHOUT contacts.delete (member, viewer, child, custom role)
+  for (const u of [MEMBER_WIFE, VIEWER_A, CHILD_A, CUSTOM_VIEW]) {
+    await assertDenied(getDoc(cnPath(db(u), 'gone01')), `${u.uid}: direct get of a deleted contact`);
+    await assertDenied(deletedQ(u), `${u.uid}: deleted == true query`);
+    await assertDenied(getDocs(col(u)), `${u.uid}: unconstrained list (would include deleted)`);
+    await assertDenied(getDocs(query(col(u), where('name', '==', 'Old driver'))), `${u.uid}: query by another field`);
+    await assertSucceeds(activeQ(u), `${u.uid}: active-contact listener query`);
+    await assertSucceeds(getDoc(cnPath(db(u), 'live01')), `${u.uid}: direct get of a live contact`);
+    await assertSucceeds(getDoc(cnPath(db(u), 'neverWritten1')), `${u.uid}: get of a missing id (reveals nothing)`);
+  }
+  // restore stays a contacts.delete action; once restored everybody reads it again
+  await assertDenied(cnUp(CUSTOM_VIEW, 'gone01', { deleted: false, deletedAt: null, deletedBy: null, rev: 3 }), 'custom role without delete cannot restore');
+  await assertSucceeds(cnUp(CUSTOM_DEL, 'gone01', { deleted: false, deletedAt: null, deletedBy: null, rev: 3 }), 'custom role with delete restores');
+  await assertSucceeds(getDoc(cnPath(db(VIEWER_A), 'gone01')), 'restored → visible to viewers');
+  // cross-household: even the owner of Home B, and nobody outside
+  await assertSucceeds(cnUp(OWNER_A, 'gone01', { deleted: true, deletedAt: serverTimestamp(), deletedBy: OWNER_A.uid, rev: 4 }));
+  await assertDenied(getDoc(cnPath(db(OWNER_HOME_B), 'gone01')), 'owner of another Home: deleted contact');
+  await assertDenied(getDocs(query(collection(db(OWNER_HOME_B), 'homes', 'hA', 'contacts'), where('deleted', '==', true))), 'owner of another Home: deleted query');
+  await assertDenied(getDocs(query(collection(db(OWNER_HOME_B), 'homes', 'hA', 'contacts'), where('deleted', '==', false))), 'owner of another Home: active query');
+  await assertDenied(getDoc(cnPath(anon(), 'gone01')), 'unauthenticated');
+  await assertDenied(getDoc(cnPath(db(MALLORY), 'live01')), 'non-member');
+  // a member's re-import onto a deleted contact's id is refused (create-only) and does not reveal it
+  await assertDenied(setDoc(cnPath(db(MEMBER_WIFE), 'gone01'), cnDoc(MEMBER_WIFE, { source: 'vcf' })), 'no resurrection by create');
 });

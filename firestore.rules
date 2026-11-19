@@ -447,7 +447,7 @@ service cloud.firestore {
     // createdBy is the caller, and it has NO roles/owner. Under these rules every Home with any
     // member also has roles/owner (bootstrap writes both atomically; invitations need roles),
     // so "no owner role" proves it was never initialised and no Owner can be displaced.
-    function adoptionTemplateVersion() { return 8; }   // == ROLE_TEMPLATE_VERSION (static test keeps them equal)
+    function adoptionTemplateVersion() { return 9; }   // == ROLE_TEMPLATE_VERSION (static test keeps them equal)
     function isUnadoptedCreator(h) {
       return signedIn() && exists(homeDoc(h))
         && get(homeDoc(h)).data.get('createdBy', '') == request.auth.uid
@@ -1069,6 +1069,36 @@ service cloud.firestore {
         && (d.stepId == null || (d.stepId is string && d.stepId.size() <= 20));
     }
 
+
+    // ================================================================= V6.4 B SHARED CONTACTS (contacts.*)
+    // Phones are stored as "<label>|<number>" strings so every element is validated by ONE regex (rules have
+    // no loops): label 1–30 chars without '|'; number = optional '+', then digit or '(', then digits and
+    // the separators space ( ) . / # * - only — never letters, quotes, '<', ':' or control characters.
+    function contactPhoneOk(l, i) {
+      return l.size() <= i || (l[i] is string && l[i].size() <= 72 && l[i].matches('^[^|\\x00-\\x1f\\x7f]{1,30}[|][+]?[0-9\\x28][0-9 \\x28\\x29./#*-]{0,39}$'));
+    }
+    function contactPhonesOk(l) {
+      return l is list && l.size() <= 10 && contactPhoneOk(l, 0) && contactPhoneOk(l, 1) && contactPhoneOk(l, 2) && contactPhoneOk(l, 3)
+        && contactPhoneOk(l, 4) && contactPhoneOk(l, 5) && contactPhoneOk(l, 6) && contactPhoneOk(l, 7) && contactPhoneOk(l, 8) && contactPhoneOk(l, 9);
+    }
+    // Category ids: ≤ 10, each an id-shaped string (existence is checked by the app; an id of a removed
+    // category is ignored on display and dropped on the next save — no dangling visible category).
+    function contactCatsOk(l) {
+      return l is list && l.size() <= 10 && l.toSet().size() == l.size()
+        && (l.size() == 0 || l.join('|').matches('^[A-Za-z0-9_-]{3,40}([|][A-Za-z0-9_-]{3,40}){0,9}$'));
+    }
+    function contactContentOk(d) {
+      return isName(d.name, 120) && isOptionalText(d.organization, 120) && isOptionalText(d.address, 300) && isOptionalText(d.notes, 1000)
+        && (d.email == null || (d.email is string && d.email.size() <= 254 && d.email.matches('^[^@\\s<>"]+@[^@\\s<>"]+\\.[^@\\s<>"]+$')))
+        && d.favorite is bool && contactPhonesOk(d.phones) && contactCatsOk(d.categoryIds);
+    }
+    function contactCategoryOk(d, catId) {
+      return d.order is int && d.order >= 0 && d.order <= 999
+        && (d.key == null
+          ? isName(d.name, 40)
+          : (d.key in ['doctors', 'restaurants', 'pharmacies', 'maintenance', 'emergency', 'family', 'friends', 'schools', 'delivery', 'other']
+             && catId == 's_' + d.key && (d.name == null || isName(d.name, 40))));
+    }
 
     // ================================================================= V6.2 CALENDAR + MONTHLY BUDGET
     function calTimeOk(v) { return v == null || (v is string && v.matches('^([01][0-9]|2[0-3]):[0-5][0-9]$')); }
@@ -2451,6 +2481,49 @@ service cloud.firestore {
           && incoming().rev == (resource == null ? 1 : resource.data.rev + 1)
           && budgetAdmin(h);
         allow delete: if false;
+      }
+
+      // =================================================== V6.4 B SHARED CONTACTS (contacts.*) — soft delete only
+      // One household directory: every active member with contacts.view reads it (no private contacts);
+      // writes need the explicit permission; the path itself is the tenant boundary (can() checks THIS home).
+      match /contacts/{contactId} {
+        // V6.4 B rev 2: a SOFT-DELETED contact is visible only to contacts.delete holders (owner / admin by
+        // default) — direct gets and queries alike. Queries of other roles must be constrained to
+        // `deleted == false` (the app's listener is). resource == null: a get of a missing id reveals nothing
+        // and lets an importer tell "never written" from "exists" without delete rights.
+        allow get, list: if can(h, 'contacts', 'view')
+          && (resource == null || resource.data.deleted == false || can(h, 'contacts', 'delete'));
+        allow create: if contactId.matches('^[A-Za-z0-9_-]{6,40}$')
+          && exactKeys(['name', 'organization', 'email', 'address', 'notes', 'favorite', 'phones', 'categoryIds', 'source',
+                        'deleted', 'deletedAt', 'deletedBy', 'rev', 'createdBy', 'createdAt', 'updatedBy', 'updatedAt', 'schemaVersion'])
+          && contactContentOk(incoming()) && incoming().deleted == false && incoming().deletedAt == null && incoming().deletedBy == null
+          && incoming().rev == 1 && incoming().createdBy == request.auth.uid && stampedNow('createdAt') && stampedBy() && incoming().schemaVersion == 1
+          // a .vcf import needs contacts.import; a manual add needs contacts.create
+          && (incoming().source == 'vcf' ? can(h, 'contacts', 'import') : (incoming().source == 'manual' && can(h, 'contacts', 'create')));
+        // Every change is one revision (stale edits / merges are refused), stamped by the caller; createdBy,
+        // createdAt, source and schemaVersion are immutable. Delete / restore = contacts.delete only.
+        allow update: if incoming().rev == resource.data.rev + 1 && stampedBy()
+          && ('deleted' in changed()
+            ? (changed().hasOnly(['deleted', 'deletedAt', 'deletedBy', 'rev', 'updatedBy', 'updatedAt'])
+               && (incoming().deleted == true
+                     ? (resource.data.deleted == false && incoming().deletedAt == request.time && incoming().deletedBy == request.auth.uid)
+                     : (resource.data.deleted == true && incoming().deletedAt == null && incoming().deletedBy == null))
+               && can(h, 'contacts', 'delete'))
+            : (resource.data.deleted == false
+               && changed().hasOnly(['name', 'organization', 'email', 'address', 'notes', 'favorite', 'phones', 'categoryIds', 'rev', 'updatedBy', 'updatedAt'])
+               && contactContentOk(incoming()) && can(h, 'contacts', 'edit')));
+        allow delete: if false;
+      }
+      // Categories: shared labels. Removing one NEVER touches contacts (their ids for it are ignored).
+      match /contactCategories/{catId} {
+        allow get, list: if can(h, 'contacts', 'view');
+        allow create: if catId.matches('^[A-Za-z0-9_-]{3,40}$')
+          && exactKeys(['name', 'key', 'order', 'rev', 'createdBy', 'createdAt', 'updatedBy', 'updatedAt', 'schemaVersion'])
+          && contactCategoryOk(incoming(), catId) && incoming().rev == 1 && incoming().createdBy == request.auth.uid
+          && stampedNow('createdAt') && stampedBy() && incoming().schemaVersion == 1 && can(h, 'contacts', 'manageCategories');
+        allow update: if changed().hasOnly(['name', 'order', 'rev', 'updatedBy', 'updatedAt']) && incoming().rev == resource.data.rev + 1
+          && stampedBy() && contactCategoryOk(incoming(), catId) && can(h, 'contacts', 'manageCategories');
+        allow delete: if can(h, 'contacts', 'manageCategories');
       }
 
       // Future module collections (expenses, recipes, cleaning…) are added here, each

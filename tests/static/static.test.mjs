@@ -104,7 +104,7 @@ test('index.html references existing local assets', () => {
 
 test('planned module directories contain registration metadata only', () => {
   // Phase 2: rooms; Phase 3: devices; Phase 4: expenses (finance); Phase 5: savings. Others: metadata only.
-  const IMPLEMENTED = new Set(['rooms', 'devices', 'expenses', 'savings', 'cleaning', 'maintenance', 'chef', 'calendar']);   // V6.2: + calendar   // + 5.3 cleaning; 5.5 maintenance; V6.1 chef (Recipes)
+  const IMPLEMENTED = new Set(['rooms', 'devices', 'expenses', 'savings', 'cleaning', 'maintenance', 'chef', 'calendar', 'contacts']);   // V6.4 B: + contacts   // V6.2: + calendar   // + 5.3 cleaning; 5.5 maintenance; V6.1 chef (Recipes)
   for (const dir of readdirSync('src/modules').filter((d) => statSync(join('src/modules', d)).isDirectory())) {
     if (IMPLEMENTED.has(dir)) continue;
     assert.deepEqual(readdirSync(join('src/modules', dir)), ['module.js'], dir);
@@ -241,7 +241,9 @@ test('Phase 5.6: only the reminders repository deletes (owner-only presentation 
   const users = SRC.filter((f) => /w\.delete\(|\.delete\(paths\.|mode: 'delete'|mode === 'delete'/.test(code(f)));
   // V6.1: + owner-only, ephemeral cooking timers (chef). Every other module still never deletes.
   assert.deepEqual(users.sort(), [join('src', 'core', 'reminders', 'reminders-repository.js'), join('src', 'core', 'reminders', 'reminders-store.js'),
-    join('src', 'modules', 'chef', 'chef-repository.js'), join('src', 'modules', 'chef', 'chef-store.js')].sort());
+    join('src', 'modules', 'chef', 'chef-repository.js'), join('src', 'modules', 'chef', 'chef-store.js'),
+    // V6.4 B: contact CATEGORIES are removable labels (rules: contacts.manageCategories); contacts themselves are soft-deleted only.
+    join('src', 'modules', 'contacts', 'contacts-repository.js'), join('src', 'modules', 'contacts', 'contacts-store.js')].sort());
 });
 
 test('Phase 5.6: the reminders bell count (and its listeners) runs only on Dashboard / Reminders / Cleaning / Maintenance', () => {

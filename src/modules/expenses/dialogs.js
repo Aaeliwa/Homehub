@@ -5,7 +5,7 @@ import { openDialog } from '../../ui/components/dialog.js';
 import { banner, errorText, setBusy } from '../../ui/components/common.js';
 import { toast } from '../../ui/components/toast.js';
 
-export const vmsg = (err) => (err && err.detail && /^(finance|calendar)\./.test(String(err.detail)) ?   // V6.2: + calendar.*
+export const vmsg = (err) => (err && err.detail && /^(finance|calendar|contacts)\./.test(String(err.detail)) ?   // V6.2: + calendar.*  V6.4 B: + contacts.*
   t(String(err.detail).split(',')[0]) : errorText(err));
 
 /**

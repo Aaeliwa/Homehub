@@ -71,7 +71,7 @@ test('write set: own active Owner membership + five CURRENT system roles; owner 
   assert.deepEqual(Object.keys(roles).sort(), [...SYSTEM_ROLE_IDS].sort());
   assert.deepEqual(Object.keys(roles).sort(), ['admin', 'child', 'member', 'owner', 'viewer']);
   assert.deepEqual([roles.owner.permissions, roles.owner.rank, roles.owner.system, roles.owner.templateVersion], [['*'], 100, true, ROLE_TEMPLATE_VERSION]);
-  assert.equal(ROLE_TEMPLATE_VERSION, 8);   // v8: V6.2 (+ calendar.*, additive)
+  assert.equal(ROLE_TEMPLATE_VERSION, 9);   // v9: V6.4 B (+ contacts.import / export / manageCategories, additive)
   for (const r of ['admin', 'member', 'viewer', 'child']) { assert.ok(roles[r].rank < 100); assert.ok(!roles[r].permissions.includes('*')); }
   assert.ok(!w.some((x) => /devices|expenses|savings|settings|users/.test(x.path.join('/'))), 'no business/profile writes');
   assert.ok(!w.some((x) => x.path.join('/') === `homes/${HOME}`), 'home document never written');

@@ -1,5 +1,30 @@
 # Changelog
 
+## 6.4.0-b — V6.4 Batch B: Shared Contacts, Revision 2 (November 2026) — NOT DEPLOYED, awaiting review
+
+- New **Contacts** module (mobile dock, desktop rail and Tools): one shared directory per Home.
+- Add, edit and search contacts, in Arabic or English, by name, organization, category or number in any format.
+- Each contact can have several categories and up to 10 labelled numbers (custom labels too).
+- Favourites are shared by the household.
+- **Call** opens the phone's dialer with a `tel:` link. **WhatsApp** opens `wa.me`; a national number asks for the country code and it is never guessed.
+- **Import `.vcf`** (vCard 2.1 / 3.0 / 4.0, including quoted-printable, legacy charsets, folding and `tel:` URIs) opens a preview first.
+  - Each row shows its status: new, duplicate, possible or ambiguous duplicate, repeated in file, or invalid.
+  - Skip is the default for any duplicate. Merge fills empty fields and adds numbers, and never overwrites. Keep separate is also available.
+  - Partial failures can be retried without duplicates. A merge into a contact that changed since the preview asks you to review it again.
+- **Export `.vcf`** (vCard 3.0, UTF-8, CRLF, folded) for one contact, a category, favourites or all, after a personal-information warning.
+- Delete is a soft delete, with a "Recently deleted" list and restore. There are 10 suggested categories, plus custom ones.
+- Permissions: role template **v9** (additive). Export, import and delete are separate rights from viewing.
+- New Firestore rules for `contacts` and `contactCategories`, which are strict, revisioned and isolated by household. No other rules, collections or data change. Batch A behaviour is unchanged.
+
+- **Revision 2 (independent review):**
+  - Soft-deleted contacts are readable only by holders of `contacts.delete`, for direct reads and queries alike.
+  - Imports never create copies, restore deleted contacts or overwrite edited ones on their own:
+    - an existing import result is verified and reported as already imported, kept, deleted or hidden;
+    - records imported before show as "imported before";
+    - copies are made only for an explicit Keep separate or Add as separate.
+  - A retry after a lost response is recognised and adds nothing.
+  - Capacity is always shown. A directory over 1,000 contacts is flagged as incomplete: search and export say so, and importing is paused. The Recently deleted list says when older deleted contacts are not shown.
+
 ## 6.4.0-a — V6.4 Batch A: existing application corrections (November 2026) — NOT DEPLOYED, awaiting review
 
 - Cleaning: Today's routine no longer shows repeated "This task is no longer active" rows after a reset, restore or archive. Obsolete plan entries are excluded and counted once, and history is kept.

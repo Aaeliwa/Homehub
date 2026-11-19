@@ -484,3 +484,26 @@ None needed in Phases 1–4 (`firestore.indexes.json` is empty). Rooms and devic
 - Owner-only.
 
 **Reminders themselves are never stored:** they are derived client-side.
+
+### V6.4 Batch B: Shared Contacts (additive; no existing collection changes)
+
+**`homes/{h}/contacts/{contactId}`** (id `^[A-Za-z0-9_-]{6,40}$`; manual adds use generated ids, `.vcf` imports use the deterministic `vc_<fnv64 of name + numbers + copy>` so a retry or a second device can never create a duplicate):
+- `name` (1–120, required), `organization` (≤ 120 | null), `email` (≤ 254, basic shape | null), `address` (≤ 300 | null), `notes` (≤ 1000 | null);
+- `phones`: ≤ 10 strings `"label|number"` — label 1–30 (no `|` / control characters; `mobile` `home` `work` `whatsapp` `fax` `other` or custom), number ≤ 40 of `+ 0-9 ( ) space . / # * -`;
+- `categoryIds`: ≤ 10 unique category ids (ids of removed categories are ignored on display and dropped on the next save);
+- `favorite` (bool, **shared** by the household);
+- `source` (`manual` | `vcf`, immutable);
+- `deleted` (bool), `deletedAt`, `deletedBy` (soft delete);
+- `rev` (starts at 1, every change is exactly + 1);
+- `createdBy`, `createdAt`, `updatedBy`, `updatedAt`, `schemaVersion` 1.
+- Listener: `where deleted == false` + `limit 1001` (capacity 1,000 + 1 to detect truncation). "Recently deleted": `where deleted == true` + `limit 201` (200 shown + 1 to detect "more"), read on demand, contacts.delete holders only.
+- **Visibility (rev 2):** a document with `deleted == true` is readable only with `contacts.delete`. Other roles must constrain queries to `deleted == false`.
+- **Capacity (rev 2):** 1,000 live contacts per Home, enforced by the client (rules cannot count on Spark). Above 1,000, the app shows the directory as incomplete, pauses imports and marks exports as partial.
+- No photos or other binary media are stored (vCard `PHOTO` / `LOGO` / `SOUND` / `KEY` are skipped and reported).
+
+**`homes/{h}/contactCategories/{catId}`** (id `^[A-Za-z0-9_-]{3,40}$`):
+- Suggested: id `s_<key>`, `key` ∈ doctors, emergency, family, school, maintenance, plumbers, electricians, delivery, government, other; `name` null (shown translated) or a custom rename (≤ 40).
+- Custom: `key` null, `name` 1–40.
+- `order` (int 0–999), `rev`, `createdBy`, `createdAt`, `updatedBy`, `updatedAt`, `schemaVersion` 1. ≤ 50 per Home (client limit).
+
+**Role template v9** (additive): `contacts.view` (all roles), `contacts.create` / `contacts.edit` / `contacts.import` / `contacts.export` (owner, admin, member), `contacts.delete` / `contacts.manageCategories` (owner, admin).

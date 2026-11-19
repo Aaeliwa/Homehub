@@ -25,6 +25,7 @@ export {
   onSnapshot,
   query,
   where,
+  limit,
   setDoc,
   updateDoc,
   writeBatch,

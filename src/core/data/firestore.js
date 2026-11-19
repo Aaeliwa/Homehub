@@ -69,6 +69,25 @@ export function watchCollection(segments, onValue, onError) {
 }
 
 /**
+ * V6.4 B: BOUNDED live listener — one equality constraint + a document limit (no orderBy, so no index).
+ * Used where a household collection can grow (shared contacts); callers show a notice at the limit.
+ */
+export function watchWhereLimited(segments, [field, op, value], max, onValue, onError) {
+  return sdk.onSnapshot(
+    sdk.query(colRef(segments), sdk.where(field, op, value), sdk.limit(max)),
+    (snap) => onValue(snap.docs.map((d) => ({ id: d.id, ...d.data(SNAP_OPTS) }))),
+    (err) => onError && onError(toAppError(err)),
+  );
+}
+/** V6.4 B: one-shot bounded read with one equality constraint (e.g. recently deleted contacts). */
+export async function readWhereLimited(segments, [field, op, value], max) {
+  try {
+    const snap = await sdk.getDocs(sdk.query(colRef(segments), sdk.where(field, op, value), sdk.limit(max)));
+    return snap.docs.map((d) => ({ id: d.id, ...d.data(SNAP_OPTS) }));
+  } catch (err) { throw toAppError(err); }
+}
+
+/**
  * Live listener on a collection filtered by ONE equality/array-contains constraint
  * ([field, op, value]). Phase 4: needed so finance queries are provably within the rules
  * (rules are not filters). Single-field constraints need no composite index.
