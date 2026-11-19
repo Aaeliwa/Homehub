@@ -5,7 +5,7 @@
  * (hosting already sends `Cache-Control: no-cache` for JS/CSS). Firestore / Auth / fonts / YouTube are
  * never touched — only same-origin page navigations are handled.
  */
-const SW_VERSION = '6.3.0.1';
+const SW_VERSION = '6.4.0';
 // V6.3.0.1: only caches whose name starts with this prefix belong to HomeHub (none are created today).
 const OWN_CACHE_PREFIX = 'homehub-';
 
