@@ -22,7 +22,7 @@ ui-debug*.log*
 emulator-normal.txt
 emulator-strict.txt
 e2e-results.txt
-screens/
+/screens/
 coverage/
 test-results/
 playwright-report/
