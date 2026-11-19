@@ -8,7 +8,9 @@
  *   categoryIds: [id] (≤ 10), source 'manual'|'vcf', deleted / deletedAt / deletedBy (soft delete),
  *   rev, createdBy / createdAt / updatedBy / updatedAt, schemaVersion 1.
  * Normalisation (digits, folded names) is computed for SEARCH and DUPLICATES only and never stored.
+ * V6.4 C: optional avatarUrl / menus (contact-media.js) — compared and written only when an input carries them.
  */
+import { validateMedia, sameMedia } from './contact-media.js';
 export const CONTACT_LIMITS = Object.freeze({
   name: 120, organization: 120, email: 254, address: 300, notes: 1000,
   phones: 10, phoneNumber: 40, phoneLabel: 30, categories: 10, categoryName: 40,
@@ -155,7 +157,9 @@ export function validateContact(input, { categories = null } = {}) {
   let categoryIds = [...new Set((Array.isArray(input.categoryIds) ? input.categoryIds : []).filter((x) => typeof x === 'string' && CAT_ID_RE.test(x)))];
   if (categories) { const known = new Set(categories.map((c) => c.id)); categoryIds = categoryIds.filter((x) => known.has(x)); }
   if (categoryIds.length > CONTACT_LIMITS.categories) errors.categoryIds = 'contacts.v.tooManyCategories';
-  const value = { name, organization, email, address, notes, favorite: input.favorite === true, phones: phones.map(encodePhone), categoryIds };
+  const value = { name, organization, email, address, notes, favorite: input.favorite === true, phones: phones.map(encodePhone), categoryIds,
+    // V6.4 C: avatarUrl / menus only when the input carries them (an import / merge / older client never erases them)
+    ...validateMedia(input, errors) };
   return { value, errors };
 }
 export function assertValid(input, opts) {
@@ -165,13 +169,21 @@ export function assertValid(input, opts) {
   return r.value;
 }
 export const CONTENT_FIELDS = Object.freeze(['name', 'organization', 'email', 'address', 'notes', 'favorite', 'phones', 'categoryIds']);
+/** V6.4 C optional media keys — absent on older contacts, never written by .vcf imports. */
+export const MEDIA_FIELDS = Object.freeze(['avatarUrl', 'menus']);
 export function createDoc(value, { uid, now, source = 'manual' }) {
-  return { ...value, source, deleted: false, deletedAt: null, deletedBy: null, rev: 1, createdBy: uid, createdAt: now, updatedBy: uid, updatedAt: now, schemaVersion: 1 };
+  const v = { ...value };
+  // an empty picture / menu list is simply not stored; imports never carry media (rules refuse it)
+  if (source !== 'manual' || !v.avatarUrl) delete v.avatarUrl;
+  if (source !== 'manual' || !Array.isArray(v.menus) || !v.menus.length) delete v.menus;
+  return { ...v, source, deleted: false, deletedAt: null, deletedBy: null, rev: 1, createdBy: uid, createdAt: now, updatedBy: uid, updatedAt: now, schemaVersion: 1 };
 }
 /** Field-level patch (only what changed) + rev + stamp; null when nothing changed. */
 export function editPatch(cur, value, { uid, now }) {
   const data = {};
   for (const k of CONTENT_FIELDS) if (JSON.stringify(cur[k] ?? null) !== JSON.stringify(value[k] ?? null)) data[k] = value[k];
+  // V6.4 C media: only keys the value CARRIES are compared (absent = untouched); absent = null = [] (no churn)
+  for (const k of MEDIA_FIELDS) if (k in value && !sameMedia(k, cur[k], value[k])) data[k] = k === 'menus' ? value[k] || [] : value[k] || null;
   if (!Object.keys(data).length) return null;
   return { ...data, rev: cur.rev + 1, updatedBy: uid, updatedAt: now };
 }

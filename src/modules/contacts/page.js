@@ -7,7 +7,7 @@
  */
 import { h } from '../../core/utils/dom.js';
 import { t, getLocale } from '../../core/i18n/i18n.js';
-import { banner, errorText, initials } from '../../ui/components/common.js';
+import { banner, errorText } from '../../ui/components/common.js';
 import { confirmDialog } from '../../ui/components/dialog.js';
 import { toast } from '../../ui/components/toast.js';
 import { formDialog } from '../expenses/dialogs.js';
@@ -15,6 +15,8 @@ import { getContactsStore } from './contacts-service.js';
 import { CONTACT_LIMITS, PHONE_LABELS, phonesOf, telUri, whatsappTarget, categoryLabel, categoryLabels, liveCategoryIds, searchMatch, sortContacts } from './contact-model.js';
 import { parseVcf, exportVcf, vcfFileName, VCF_LIMITS } from './vcard.js';
 import { buildPreview, planImport, allowedActions, countPreview, separateOp } from './contacts-import.js';
+import { MEDIA_LIMITS, MENU_KINDS, menusOf, normalizeHttpsUrl, showsMenu, restaurantCategoryIds } from './contact-media.js';
+import { avatarEl, menuSection, openImageViewer } from './media-ui.js';
 
 export function mount(outlet, ctx) {
   const state = ctx.getState(); const can = (p) => state.permissions.can(p);
@@ -22,6 +24,9 @@ export function mount(outlet, ctx) {
   try { store = getContactsStore(ctx); } catch (e) { outlet.replaceChildren(h('div', { class: 'page' }, banner('error', errorText(e)))); return () => {}; }
   const P = { create: can('contacts.create'), edit: can('contacts.edit'), del: can('contacts.delete'), imp: can('contacts.import'), exp: can('contacts.export'), cats: can('contacts.manageCategories') };
   let view = 'list'; let sel = null; let q = ''; let cat = 'all'; let favOnly = false; let imp = null; let deleted = null;
+  // V6.4 C: Menu section state survives re-renders (per contact); the viewer lives outside the page body
+  let menu = { id: null, open: false, previews: new Set() }; let viewer = null; let detailKey = null;
+  const menuState = (id) => { if (menu.id !== id) menu = { id, open: false, previews: new Set() }; return menu; };
   const root = h('div', { class: 'page page--contacts accent-rose', id: 'ct-page' }); const body = h('div', { class: 'ct-body', id: 'ct-body' });
   root.append(body); outlet.replaceChildren(root);
   const msg = (e) => t(e && e.detail && /^contacts\./.test(e.detail) ? e.detail : e && /permission/i.test(String(e.code)) ? 'contacts.err.denied' : 'contacts.err.save');
@@ -57,7 +62,7 @@ export function mount(outlet, ctx) {
     const first = phonesOf(c)[0];
     return h('li', { class: 'ct-card', dataset: { id: c.id } },
       h('button', { type: 'button', class: 'ct-card__open', onClick: () => { sel = c.id; view = 'detail'; render(); } },
-        h('span', { class: 'avatar ct-avatar', 'aria-hidden': 'true' }, initials(c.name)),
+        avatarEl(c.name, c.avatarUrl),
         h('span', { class: 'ct-card__text' },
           h('span', { class: 'ct-card__name', dir: 'auto' }, c.name),
           c.organization ? h('span', { class: 'ct-card__sub', dir: 'auto' }, c.organization) : null,
@@ -123,7 +128,7 @@ export function mount(outlet, ctx) {
         h('button', { type: 'button', class: 'btn btn--ghost btn--sm', id: 'ct-back', onClick: () => { view = 'list'; sel = null; render(); } }, `‹ ${t('contacts.back')}`),
         favButton(c, 'ct-fav--lg')),
       h('div', { class: 'ct-detail__id' },
-        h('span', { class: 'avatar avatar--lg ct-avatar', 'aria-hidden': 'true' }, initials(c.name)),
+        avatarEl(c.name, c.avatarUrl, { lg: true, id: 'ct-avatar' }),
         h('div', { class: 'ct-detail__names' }, h('h2', { class: 'ct-detail__name', id: 'ct-name', dir: 'auto' }, c.name),
           c.organization ? h('p', { class: 'ct-card__sub', dir: 'auto' }, c.organization) : null, chips(c))),
       phones.length ? h('ul', { class: 'ct-phones', id: 'ct-phones' }, phones.map((p, i) => {
@@ -136,6 +141,10 @@ export function mount(outlet, ctx) {
               'aria-label': t('contacts.waX', { name: c.name, number: p.number }), onClick: () => openWhatsApp(p.number, c.name) }, t('contacts.whatsapp')) : null,
             h('button', { type: 'button', class: 'btn btn--ghost btn--sm', id: `ct-copy-${i}`, onClick: () => copy(p.number) }, t('contacts.copy'))));
       })) : h('p', { class: 'empty' }, t('contacts.noPhones')),
+      // V6.4 C: Restaurants (by category KEY — a rename keeps it). Removing the category hides the section;
+      // the menu links stay stored and reappear when Restaurants is assigned again.
+      showsMenu(liveCategoryIds(c, cats()), cats()) ? menuSection(c, { state: menuState(c.id), canEdit: P.edit, onChange: () => { detailKey = null; render(); },
+        openViewer: (items, k) => { viewer = openImageViewer(items, k); } }) : null,
       h('dl', { class: 'facts ct-facts' },
         c.email ? h('div', null, h('dt', null, t('contacts.f.email')), h('dd', { dir: 'ltr' }, h('a', { class: 'text-link', href: `mailto:${encodeURIComponent(c.email).replace(/%40/g, '@')}`, id: 'ct-email' }, c.email))) : null,
         c.address ? h('div', null, h('dt', null, t('contacts.f.address')), h('dd', { dir: 'auto', class: 'ct-pre' }, c.address)) : null,
@@ -174,6 +183,57 @@ export function mount(outlet, ctx) {
       cats().length ? cats().map((k) => h('label', { class: 'fin-check' }, h('input', { type: 'checkbox', name: 'ct-cat', value: k.id, checked: !!(c && (c.categoryIds || []).includes(k.id)) }), ` ${categoryLabel(k, t)}`))
         : h('p', { class: 'field__hint' }, t('contacts.cats.none')));
     const fav = h('label', { class: 'fin-check' }, h('input', { type: 'checkbox', id: 'ct-f-fav', checked: !!(c && c.favorite) }), ` ${t('contacts.f.favorite')}`);
+    // ---- V6.4 C picture link: preview / replace / remove; nothing is uploaded
+    const avInput = h('input', { class: 'input', id: 'ct-f-avatar', type: 'url', inputmode: 'url', dir: 'ltr', maxlength: MEDIA_LIMITS.rawInput, autocomplete: 'off', spellcheck: 'false',
+      value: (c && c.avatarUrl) || '', placeholder: 'https://…', 'aria-describedby': 'ct-f-avatar-msg ct-f-avatar-hint' });
+    const avPreview = h('span', { class: 'ct-avatar-preview', id: 'ct-f-avatar-preview' });
+    const avMsg = h('p', { class: 'field__hint', id: 'ct-f-avatar-msg', 'aria-live': 'polite' });
+    const nameNow = () => (document.getElementById('ct-f-name') || {}).value || (c && c.name) || '';
+    const showAvatar = () => {
+      const r = normalizeHttpsUrl(avInput.value);
+      avMsg.textContent = r.error ? t(r.error) : ''; avMsg.classList.toggle('ct-warn', !!r.error);
+      const el = avatarEl(nameNow(), r.url || null, { lg: true });
+      const img = el.querySelector('img'); if (img) img.addEventListener('error', () => { avMsg.textContent = t('contacts.f.avatarBroken'); avMsg.classList.add('ct-warn'); });
+      avPreview.replaceChildren(el); avRemove.hidden = !avInput.value;
+    };
+    let avTimer = null;
+    avInput.addEventListener('input', () => { clearTimeout(avTimer); avTimer = setTimeout(showAvatar, 600); });
+    avInput.addEventListener('change', showAvatar);
+    const avRemove = h('button', { type: 'button', class: 'btn btn--ghost btn--sm', id: 'ct-f-avatar-remove', hidden: !(c && c.avatarUrl), onClick: () => { avInput.value = ''; showAvatar(); avInput.focus(); } }, t('contacts.f.avatarRemove'));
+    const avatarField = h('div', { class: 'field ct-edit-avatar' },
+      h('label', { class: 'field__label', for: 'ct-f-avatar' }, t('contacts.f.avatar')),
+      h('div', { class: 'ct-edit-avatar__row' }, avPreview, avInput, avRemove), avMsg,
+      h('p', { class: 'field__hint', id: 'ct-f-avatar-hint' }, t('contacts.f.avatarHint')));
+    showAvatar();
+    // ---- V6.4 C menu links (Restaurants): ordered rows; hidden — but KEPT and saved unchanged — when the
+    // Restaurants category is not selected
+    const mRows = h('ol', { class: 'ct-edit-menus', id: 'ct-f-menu-rows' });
+    const renumber = () => [...mRows.children].forEach((r, k, all) => { r.querySelector('[data-role=up]').disabled = k === 0; r.querySelector('[data-role=down]').disabled = k === all.length - 1; });
+    const addMenu = (m = { kind: 'auto', label: '', url: '' }) => {
+      if (mRows.children.length >= MEDIA_LIMITS.menus) { toast(t('contacts.v.tooManyMenus'), { tone: 'error' }); return; }
+      const row = h('li', { class: 'ct-edit-menu' },
+        h('select', { class: 'input input--sm', 'data-role': 'kind', 'aria-label': t('contacts.f.menuKind') },
+          ['auto', ...MENU_KINDS].map((k) => h('option', { value: k, selected: m.kind === k }, t(`contacts.kind.${k}`)))),
+        h('input', { class: 'input input--sm', 'data-role': 'label', maxlength: MEDIA_LIMITS.menuLabel, value: m.label, dir: 'auto', placeholder: t('contacts.f.menuLabel'), 'aria-label': t('contacts.f.menuLabel') }),
+        h('input', { class: 'input', 'data-role': 'url', type: 'url', inputmode: 'url', dir: 'ltr', maxlength: MEDIA_LIMITS.rawInput, value: m.url, placeholder: 'https://…', 'aria-label': t('contacts.f.menuUrl'), spellcheck: 'false' }),
+        h('span', { class: 'ct-edit-menu__btns' },
+          h('button', { type: 'button', class: 'icon-btn', 'data-role': 'up', 'aria-label': t('contacts.menuUp'), title: t('contacts.menuUp'), onClick: (e) => { if (row.previousElementSibling) { mRows.insertBefore(row, row.previousElementSibling); renumber(); e.currentTarget.disabled ? row.querySelector('[data-role=down]').focus() : e.currentTarget.focus(); } } }, '↑'),
+          h('button', { type: 'button', class: 'icon-btn', 'data-role': 'down', 'aria-label': t('contacts.menuDown'), title: t('contacts.menuDown'), onClick: (e) => { if (row.nextElementSibling) { mRows.insertBefore(row.nextElementSibling, row); renumber(); e.currentTarget.disabled ? row.querySelector('[data-role=up]').focus() : e.currentTarget.focus(); } } }, '↓'),
+          h('button', { type: 'button', class: 'icon-btn', 'data-role': 'remove', 'aria-label': t('contacts.menuRemove'), title: t('contacts.menuRemove'), onClick: () => { row.remove(); renumber(); } }, '✕')));
+      mRows.append(row); renumber();
+    };
+    for (const m of c ? menusOf(c) : []) addMenu(m);
+    const restIds = restaurantCategoryIds(cats());
+    const menuBox = h('fieldset', { class: 'ct-edit-menus-box', id: 'ct-f-menus' }, h('legend', { class: 'field__label' }, t('contacts.f.menus')),
+      h('p', { class: 'field__hint' }, t('contacts.f.menusHint')), mRows,
+      h('button', { type: 'button', class: 'btn btn--ghost btn--sm', id: 'ct-add-menu', onClick: () => { addMenu(); mRows.lastElementChild.querySelector('[data-role=url]').focus(); } }, `＋ ${t('contacts.addMenu')}`));
+    const kept = h('p', { class: 'field__hint', id: 'ct-f-menus-kept' });
+    const syncMenus = () => {
+      const on = [...catBoxes.querySelectorAll('input[name="ct-cat"]:checked')].some((x) => restIds.includes(x.value));
+      menuBox.hidden = !on; const n = mRows.children.length;
+      kept.hidden = on || !n; kept.textContent = n ? t('contacts.f.menusKept', { n }) : '';
+    };
+    catBoxes.addEventListener('change', syncMenus); syncMenus();
     formDialog({ title: t(c ? 'contacts.editTitle' : 'contacts.newTitle'), id: 'ct-form', submitLabel: t('common.save'), container: root,
       fields: [field('ct-f-name', `${t('contacts.f.name')} *`, c && c.name, { max: CONTACT_LIMITS.name }),
         h('div', { class: 'field' }, h('span', { class: 'field__label' }, t('contacts.f.phones')), rows,
@@ -182,7 +242,7 @@ export function mount(outlet, ctx) {
         field('ct-f-email', t('contacts.f.email'), c && c.email, { max: CONTACT_LIMITS.email, dir: 'ltr', type: 'email' }),
         field('ct-f-address', t('contacts.f.address'), c && c.address, { max: CONTACT_LIMITS.address, area: true }),
         field('ct-f-notes', t('contacts.f.notes'), c && c.notes, { max: CONTACT_LIMITS.notes, area: true }),
-        catBoxes, fav],
+        avatarField, catBoxes, menuBox, kept, fav],
       onSubmit: async () => {
         const form = document.getElementById('ct-form');
         const input = {
@@ -190,6 +250,9 @@ export function mount(outlet, ctx) {
           address: form.querySelector('#ct-f-address').value, notes: form.querySelector('#ct-f-notes').value, favorite: form.querySelector('#ct-f-fav').checked,
           categoryIds: [...form.querySelectorAll('input[name="ct-cat"]:checked')].map((x) => x.value),
           phones: [...form.querySelectorAll('.ct-edit-phone')].map((r) => { const l = r.querySelector('[data-role=label]').value; return { label: l === '__custom' ? r.querySelector('[data-role=custom]').value : l, number: r.querySelector('[data-role=number]').value }; }),
+          // V6.4 C: always sent from the editor (hidden menu rows included, so they are never dropped)
+          avatarUrl: avInput.value.trim() || null,
+          menus: [...form.querySelectorAll('.ct-edit-menu')].map((r) => ({ kind: r.querySelector('[data-role=kind]').value, label: r.querySelector('[data-role=label]').value, url: r.querySelector('[data-role=url]').value })),
         };
         if (c) { const changed = await store.updateContact(c.id, input, { baseRev }); return changed ? 'contacts.saved' : undefined; }
         const id = await store.createContact(input); sel = id; view = 'detail'; render();
@@ -354,7 +417,18 @@ export function mount(outlet, ctx) {
     if (snap.status === 'denied') { body.replaceChildren(header(), banner('error', t('contacts.err.noAccess'))); return; }
     if (snap.status === 'error') { body.replaceChildren(header(), banner('error', errorText(snap.error))); return; }
     if (snap.status !== 'ready') { body.replaceChildren(header(), h('p', { class: 'muted', role: 'status', id: 'ct-loading' }, t('common.loading'))); return; }
-    if (view === 'detail') { const c = store.contact(sel); if (!c) { view = 'list'; sel = null; } else { body.replaceChildren(header(), detailView(c)); return; } }
+    if (view === 'detail') {
+      const c = store.contact(sel);
+      if (!c) { view = 'list'; sel = null; }
+      else {
+        // same contact revision + same categories → nothing to redraw (open menu previews are not reloaded)
+        const key = JSON.stringify([c.id, c.rev, snap.categories.map((k) => [k.id, k.rev, k.name]), snap.atLimit, snap.truncated]);
+        if (key === detailKey && body.querySelector('#ct-detail')) return;
+        detailKey = key; body.replaceChildren(header(), detailView(c)); return;
+      }
+    }
+    detailKey = null;
+    menu = { id: null, open: false, previews: new Set() };   // leaving a contact collapses its menu: no requests until opened again
     if (view === 'import' && imp) { body.replaceChildren(header(), importView()); return; }
     if (view === 'categories' && P.cats) { body.replaceChildren(header(), categoriesView()); return; }
     if (view === 'deleted' && P.del) { body.replaceChildren(header(), deletedView()); return; }
@@ -364,5 +438,5 @@ export function mount(outlet, ctx) {
     if (focusSearch) { const s = document.getElementById('ct-search'); s.focus(); s.setSelectionRange(s.value.length, s.value.length); }
   }
   const off = store.subscribe(() => { if (imp && imp.busy) return; render(); });
-  return () => { off(); };
+  return () => { off(); if (viewer) viewer.finish('unmount'); };   // route change / household switch / sign-out / re-render
 }

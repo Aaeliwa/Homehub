@@ -378,3 +378,45 @@ All rows (plus the Rooms cases) are covered by `tests/rules/rules.test.mjs` (55 
 - **Import:** parsed in the browser (≤ 1 MB, ≤ 500 records, bounded lines). Nothing is written before the user confirms the preview. Photos and other media are discarded.
 - **Dialer and WhatsApp:** `tel:` links and `https://wa.me/<digits>` are built only from validated numbers. A national number asks for a country code (never guessed). WhatsApp opens with `noopener,noreferrer`.
 - **Existing Homes:** the owner (`*`) has everything at once. Admins and members get import / export / category management after the owner uses **Update default roles** (template v9, additive: custom grants are kept).
+
+## V6.4 Batch C: contact pictures and restaurant menus
+
+| Action | Owner | Admin | Member | Viewer | Child | Non-member / other Home |
+|---|---|---|---|---|---|---|
+| See pictures and open menus (`contacts.view`) | ✓ | ✓ | ✓ | ✓ | ✓ | ✗ |
+| Add a contact with a picture or menus (`contacts.create`) | ✓ | ✓ | ✓ | ✗ | ✗ | ✗ |
+| Set, replace or remove a picture; add, reorder or remove menus (`contacts.edit`) | ✓ | ✓ | ✓ | ✗ | ✗ | ✗ |
+| Import media through `.vcf` | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ |
+| Change media on a deleted contact | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ |
+
+- **Validation in the client and the rules:**
+  - https only;
+  - no credentials, executable schemes (`javascript:`, `data:`, `vbscript:`, `file:`, `blob:` and so on), IP addresses or bare `localhost`;
+  - no prohibited host names (rev 2): `*.localhost`, `.local`, `.localdomain`, `.internal`, `.intranet`, `.lan`, `.home`, `.home.arpa`, `.corp`, `.private`, and the wildcard-DNS services `nip.io`, `sslip.io`, `xip.io`, `localtest.me` and `lvh.me`;
+  - menus are validated element by element (rev 2), so combined or split entries are refused;
+  - URLs ≤ 500 characters, ≤ 10 menus, labels ≤ 40 characters;
+  - exact key list, `rev + 1`, caller stamps, and tenant isolation under `homes/{h}`.
+- **Rendering:** URLs are only assigned to `img.src`, `iframe.src` and `a.href`. User text is set with `textContent`; there is no HTML sink (static test).
+- **Privacy:**
+  - Pictures use `loading="lazy"` and `referrerpolicy="no-referrer"`, with no credentials (no `crossorigin`).
+  - Menus make no external request until the Menu section is opened, and a Drive preview loads only on "Show preview". The section collapses again when you leave the contact.
+  - The editor explains that the hosting site can see that a picture or menu was viewed.
+- **Embedding:**
+  - Only Google Drive and Google Docs file links are embedded, through their official `/preview` URL; private files stay private and sharing is never changed.
+  - The iframe uses `sandbox="allow-scripts allow-same-origin"` (no top navigation, popups, forms, modals or downloads), `allow=""`, no referrer and lazy loading.
+  - The CSP `frame-src` allows only YouTube (recipes) and `drive.google.com` / `docs.google.com`.
+  - Iframe `load` is never treated as success; the "blocked or private" hint and **Open original** are always shown.
+  - Other PDFs and websites are never embedded. Chromium cannot show PDFs inside a sandboxed frame, phone browsers do not embed PDFs at all, and an unsandboxed frame is not allowed.
+- **External navigation:** `target="_blank"` with `rel="noopener noreferrer"` and `referrerpolicy="no-referrer"`.
+- **Service worker:** network-only and same-origin navigations only. Cross-origin pictures and menus bypass it and are never cached (static test).
+- **Older clients (6.4.0-b):** they write only field-level patches of the Batch B fields, soft delete and restore, so they cannot remove `avatarUrl` or `menus`. Rules emulator test `V64C-3` replays those writes. The new client compares media only when the edit form carries it, treating absent, `null` and `[]` as equal, so a no-op save writes nothing.
+
+### Limits of the external-URL checks (V6.4 Batch C revision 2)
+
+The URL checks are **syntactic and best-effort**. HomeHub has no server, proxy or Cloud Function (Spark plan), so it **cannot**:
+
+- **resolve DNS.** A public-looking name can resolve to a private or loopback address (DNS rebinding, or a host the owner points at `10.x` / `192.168.x`). The deny-list only covers well-known local suffixes and wildcard-DNS services, and is necessarily incomplete.
+- **see redirects.** The browser follows them itself when it loads an `<img>` or the Drive frame. An allowed https URL may redirect elsewhere. Browsers still block or upgrade `http:` subresources on this https page (mixed content), and recent Chromium versions restrict public-to-private-network requests (Private Network Access / Local Network Access), but HomeHub does not depend on or guarantee either.
+- **inspect content.** A link can change what it serves at any time.
+
+**What this means:** HomeHub does **not** claim complete protection against requests to private networks. Pictures, menu images and frames are requested without a referrer, and HomeHub adds no credentials (no `crossorigin`). The browser still sends that site's own cookies, as for any embedded image. The editor and Menu section tell people that the hosting site sees the request. Only household members with `contacts.edit` can add links.

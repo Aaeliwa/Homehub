@@ -261,9 +261,10 @@ test('V6 batch 3: the clean-start dry run is READ-ONLY and Home-confirmed', () =
   assert.match(src, /export function buildCleanStartPlan/, 'the plan (exact paths) is a pure, unit-tested function');
 });
 
-test('V6.1: CSP restricts iframes to the YouTube player only and nothing else', () => {
+test('V6.1 / V6.4 C: CSP restricts iframes to the YouTube player and Google Drive / Docs previews — nothing else', () => {
   const m = read('index.html').match(/<meta http-equiv="Content-Security-Policy" content="([^"]+)">/);
   assert.ok(m, 'CSP present');
-  assert.equal(m[1], 'frame-src https://www.youtube-nocookie.com https://www.youtube.com', 'only frame-src, only YouTube origins');
+  // V6.4 C adds exactly the two Google preview origins used for restaurant menus (sandboxed "/preview" embeds)
+  assert.equal(m[1], 'frame-src https://www.youtube-nocookie.com https://www.youtube.com https://drive.google.com https://docs.google.com', 'only frame-src, only these origins');
 });
 

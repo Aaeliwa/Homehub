@@ -257,8 +257,11 @@ test('B-misc: createDoc / editPatch / phonesOf shapes match the rules key lists'
   const v = validateContact({ name: 'X', phones: [{ label: 'mobile', number: '0100' }] }).value;
   const d = createDoc(v, { uid: 'u', now: 'N', source: 'vcf' });
   const rules = readFileSync(new URL('../../firestore.rules', import.meta.url), 'utf8');
-  const keys = rules.match(/match \/contacts\/\{contactId\}[\s\S]*?exactKeys\(\[([\s\S]*?)\]\)/)[1].match(/'(\w+)'/g).map((x) => x.slice(1, -1)).sort();
-  assert.deepEqual(Object.keys(d).sort(), keys);
+  // V6.4 C: the Batch B keys are REQUIRED (hasAll); the only optional extras (hasOnly) are the media keys
+  const block = rules.match(/match \/contacts\/\{contactId\}[\s\S]*?allow update/)[0];
+  const list = (fn) => block.match(new RegExp(`incoming\\(\\)\\.keys\\(\\)\\.${fn}\\(\\[([\\s\\S]*?)\\]\\)`))[1].match(/'(\w+)'/g).map((x) => x.slice(1, -1)).sort();
+  assert.deepEqual(Object.keys(d).sort(), list('hasAll'), 'an import (and an older client) writes exactly the required keys');
+  assert.deepEqual(list('hasOnly').filter((k) => !list('hasAll').includes(k)).sort(), ['avatarUrl', 'menus']);
   assert.deepEqual(Object.keys(editPatch({ ...d, id: 'i' }, { ...v, name: 'Y' }, { uid: 'u', now: 'N' })).sort(), ['name', 'rev', 'updatedAt', 'updatedBy']);
   assert.deepEqual(phonesOf({ phones: ['a|1', 'noPipe'] }), [{ label: 'a', number: '1' }, { label: 'other', number: 'noPipe' }]);
 });

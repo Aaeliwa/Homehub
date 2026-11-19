@@ -1087,10 +1087,37 @@ service cloud.firestore {
       return l is list && l.size() <= 10 && l.toSet().size() == l.size()
         && (l.size() == 0 || l.join('|').matches('^[A-Za-z0-9_-]{3,40}([|][A-Za-z0-9_-]{3,40}){0,9}$'));
     }
+    // V6.4 C contact media — OPTIONAL keys (older contacts have neither): a picture and restaurant menus are
+    // EXTERNAL https LINKS only (no Storage, no bytes). One shared grammar with contact-media.js (unit-tested):
+    // https, DNS host with an alphabetic TLD (no credentials / '@' in the authority, no IP literals, no bare
+    // localhost, no trailing dot), printable URL characters, no '|'; plus a deny-list of local-network suffixes
+    // and wildcard-DNS services (best-effort, syntactic only: DNS answers and redirects cannot be checked).
+    // avatarUrl ≤ 500 chars. menus: ≤ 10 elements, EACH validated on its own (rev 2 — structure is never taken from a joined string, so
+    // an element cannot carry two entries and two elements cannot combine): "kind|label|url", kind
+    // image|pdf|web|drive, label ≤ 40, url ≤ 500 (exact, by the per-element length pattern).
+    function contactUrlOk(v) {
+      return v is string && v.size() <= 500 && v.matches('^https:[/][/][a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?([.][a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*[.][a-z]([a-z0-9-]{0,61}[a-z0-9])?(:[0-9]{1,5})?([/?#][!#$%&\\x27\\x28\\x29*+,./0-9:;=?@A-Z\\x5b\\x5d_a-z~-]*)?$')
+        && !v.matches('^https:[/][/]([a-z0-9-]{1,63}[.])*(localhost|local|localdomain|internal|intranet|lan|home|home[.]arpa|corp|private|nip[.]io|sslip[.]io|xip[.]io|localtest[.]me|lvh[.]me)([:/?#].*)?$');
+    }
+    // one element = exactly one entry (anchored) with exact lengths — checked element by element, by index
+    function contactMenuOk(l, i) {
+      return l.size() <= i || (l[i].matches('^[a-z]{3,5}[|][^|]{0,40}[|][^|]{8,500}$')
+                               && l[i].matches('^(image|pdf|web|drive)[|][^|\\x00-\\x1f\\x7f]{0,40}[|]https:[/][/][a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?([.][a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*[.][a-z]([a-z0-9-]{0,61}[a-z0-9])?(:[0-9]{1,5})?([/?#][!#$%&\\x27\\x28\\x29*+,./0-9:;=?@A-Z\\x5b\\x5d_a-z~-]*)?$'));
+    }
+    // after every element passed contactMenuOk, the joined list's '|' boundaries are the elements' own, so the
+    // (negative) host deny check can run once over menus.join('|') — it only inspects URL fields
+    function contactMenusOk(l) {
+      return l is list && l.size() <= 10 && contactMenuOk(l, 0) && contactMenuOk(l, 1) && contactMenuOk(l, 2) && contactMenuOk(l, 3)
+        && contactMenuOk(l, 4) && contactMenuOk(l, 5) && contactMenuOk(l, 6) && contactMenuOk(l, 7) && contactMenuOk(l, 8) && contactMenuOk(l, 9)
+        && (l.size() == 0 || !l.join('|').matches('^([^|]*[|][^|]*[|][^|]*[|])*[^|]*[|][^|]*[|]https:[/][/]([a-z0-9-]{1,63}[.])*(localhost|local|localdomain|internal|intranet|lan|home|home[.]arpa|corp|private|nip[.]io|sslip[.]io|xip[.]io|localtest[.]me|lvh[.]me)([:/?#][^|]*)?([|].*)?$'));
+    }
+    function contactMediaOk(d) {
+      return contactMenusOk(d.get('menus', [])) && (d.get('avatarUrl', null) == null || contactUrlOk(d.avatarUrl));
+    }
     function contactContentOk(d) {
       return isName(d.name, 120) && isOptionalText(d.organization, 120) && isOptionalText(d.address, 300) && isOptionalText(d.notes, 1000)
         && (d.email == null || (d.email is string && d.email.size() <= 254 && d.email.matches('^[^@\\s<>"]+@[^@\\s<>"]+\\.[^@\\s<>"]+$')))
-        && d.favorite is bool && contactPhonesOk(d.phones) && contactCatsOk(d.categoryIds);
+        && d.favorite is bool && contactPhonesOk(d.phones) && contactCatsOk(d.categoryIds) && contactMediaOk(d);
     }
     function contactCategoryOk(d, catId) {
       return d.order is int && d.order >= 0 && d.order <= 999
@@ -2494,12 +2521,19 @@ service cloud.firestore {
         allow get, list: if can(h, 'contacts', 'view')
           && (resource == null || resource.data.deleted == false || can(h, 'contacts', 'delete'));
         allow create: if contactId.matches('^[A-Za-z0-9_-]{6,40}$')
-          && exactKeys(['name', 'organization', 'email', 'address', 'notes', 'favorite', 'phones', 'categoryIds', 'source',
+          // V6.4 C: the 18 Batch B keys are REQUIRED; avatarUrl / menus are the only OPTIONAL extra keys
+          && incoming().keys().hasAll(['name', 'organization', 'email', 'address', 'notes', 'favorite', 'phones', 'categoryIds', 'source',
                         'deleted', 'deletedAt', 'deletedBy', 'rev', 'createdBy', 'createdAt', 'updatedBy', 'updatedAt', 'schemaVersion'])
+          && incoming().keys().hasOnly(['name', 'organization', 'email', 'address', 'notes', 'favorite', 'phones', 'categoryIds', 'source',
+                        'deleted', 'deletedAt', 'deletedBy', 'rev', 'createdBy', 'createdAt', 'updatedBy', 'updatedAt', 'schemaVersion',
+                        'avatarUrl', 'menus'])
           && contactContentOk(incoming()) && incoming().deleted == false && incoming().deletedAt == null && incoming().deletedBy == null
           && incoming().rev == 1 && incoming().createdBy == request.auth.uid && stampedNow('createdAt') && stampedBy() && incoming().schemaVersion == 1
           // a .vcf import needs contacts.import; a manual add needs contacts.create
-          && (incoming().source == 'vcf' ? can(h, 'contacts', 'import') : (incoming().source == 'manual' && can(h, 'contacts', 'create')));
+          // (V6.4 C: an import never carries media — .vcf PHOTO etc. are skipped, nothing external is fetched)
+          && (incoming().source == 'vcf'
+                ? (!('avatarUrl' in incoming()) && !('menus' in incoming()) && can(h, 'contacts', 'import'))
+                : (incoming().source == 'manual' && can(h, 'contacts', 'create')));
         // Every change is one revision (stale edits / merges are refused), stamped by the caller; createdBy,
         // createdAt, source and schemaVersion are immutable. Delete / restore = contacts.delete only.
         allow update: if incoming().rev == resource.data.rev + 1 && stampedBy()
@@ -2510,7 +2544,7 @@ service cloud.firestore {
                      : (resource.data.deleted == true && incoming().deletedAt == null && incoming().deletedBy == null))
                && can(h, 'contacts', 'delete'))
             : (resource.data.deleted == false
-               && changed().hasOnly(['name', 'organization', 'email', 'address', 'notes', 'favorite', 'phones', 'categoryIds', 'rev', 'updatedBy', 'updatedAt'])
+               && changed().hasOnly(['name', 'organization', 'email', 'address', 'notes', 'favorite', 'phones', 'categoryIds', 'avatarUrl', 'menus', 'rev', 'updatedBy', 'updatedAt'])
                && contactContentOk(incoming()) && can(h, 'contacts', 'edit')));
         allow delete: if false;
       }

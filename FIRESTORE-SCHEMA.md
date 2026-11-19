@@ -507,3 +507,32 @@ None needed in Phases 1–4 (`firestore.indexes.json` is empty). Rooms and devic
 - `order` (int 0–999), `rev`, `createdBy`, `createdAt`, `updatedBy`, `updatedAt`, `schemaVersion` 1. ≤ 50 per Home (client limit).
 
 **Role template v9** (additive): `contacts.view` (all roles), `contacts.create` / `contacts.edit` / `contacts.import` / `contacts.export` (owner, admin, member), `contacts.delete` / `contacts.manageCategories` (owner, admin).
+
+### V6.4 Batch C: contact pictures and restaurant menus (additive; optional keys)
+
+Two OPTIONAL keys on `homes/{h}/contacts/{contactId}`. Contacts written before 6.4.0-c have neither key and need no migration.
+
+| Key | Type | Limits | Notes |
+|---|---|---|---|
+| `avatarUrl` | string \| null | https URL, ≤ 500 characters | Shown as a circular avatar. Missing, invalid or broken → initials |
+| `menus` | list of strings | ≤ 10 entries, each `"kind|label|url"` | `kind` ∈ `image`, `pdf`, `web`, `drive`; `label` 0–40 characters, without `|` or control characters; `url` as above. The list order is the display order |
+
+- **URL grammar** (identical in `contact-media.js` and `firestore.rules`, enforced by a unit test):
+  - `https://` only;
+  - a lower-case DNS host with an alphabetic top-level label (no trailing dot): no IP addresses, no bare `localhost`, no credentials or `@` in the authority;
+  - not on a prohibited host (rev 2): the local-network suffixes `localhost`, `local`, `localdomain`, `internal`, `intranet`, `lan`, `home`, `home.arpa`, `corp` and `private`, and the wildcard-DNS services `nip.io`, `sslip.io`, `xip.io`, `localtest.me` and `lvh.me`;
+  - an optional port;
+  - path, query and fragment limited to printable URL characters: no spaces, quotes, `<`, `>`, `\`, `^`, `` ` ``, `{`, `|`, `}` or control characters.
+  - This is a syntactic, best-effort check. See SECURITY.md for what it cannot prevent (DNS, redirects).
+- **Why strings, not maps:** the same technique as `phones`.
+  - **Revision 2:** every element is validated on its own, by index (`menus[0]` … `menus[9]`), with an anchored length pattern and an anchored format pattern. One element is therefore exactly one entry: it cannot carry two entries, and two elements cannot combine into one.
+  - Only after that does a single negative check (the host deny-list) run over `menus.join('|')`. It is safe there because the element boundaries are already proven.
+  - The Batch C revision 1 check validated the structure on the joined string, which allowed combined and split elements. It is replaced.
+- **No bytes:** no Base64 or binary data, no Firebase Storage. Pictures and menus stay on their own hosts.
+- **Restaurants:** the Menu section is shown when a live category with key `restaurants` (`s_restaurants`) is assigned.
+  - A rename keeps it.
+  - Removing the category or un-assigning it hides the section; `menus` is kept.
+  - Re-adding the suggested category, or re-assigning it, shows the section again.
+- **Imports and merges:** a `.vcf` import never creates media keys; the rules refuse `avatarUrl` or `menus` on `source: 'vcf'` creates. A merge never touches them.
+- **Edits:** media changes are ordinary content edits: `contacts.edit`, `rev + 1`, stamped by the caller.
+- **Export:** vCard export intentionally excludes `avatarUrl` and `menus` (no `PHOTO`, `LOGO`, `URL` or custom menu lines). Export compatibility with 6.4.0-b is unchanged.

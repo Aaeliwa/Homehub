@@ -2802,3 +2802,114 @@ test('V64B-8 (rev 2) deleted contacts: only contacts.delete holders read them �
   // a member's re-import onto a deleted contact's id is refused (create-only) and does not reveal it
   await assertDenied(setDoc(cnPath(db(MEMBER_WIFE), 'gone01'), cnDoc(MEMBER_WIFE, { source: 'vcf' })), 'no resurrection by create');
 });
+
+// ---------------------------------------------------------------------------------------------- V6.4 C: contact media
+const AV = 'https://cdn.example.com/logo.png';
+const MN = (kind, label, url) => `${kind}|${label}|${url}`;
+const MENUS = [MN('image', 'Page 1', 'https://cdn.example.com/m1.jpg'), MN('pdf', 'قائمة', 'https://a.example/menu.pdf'), MN('web', '', 'https://a.example/'),
+  MN('drive', 'Drive', 'https://drive.google.com/file/d/1AbCdEfGhIjKlMnOp/view')];
+const dataOf = async (u, id) => (await getDoc(cnPath(db(u), id))).data();
+
+test('V64C-1 contact media create: optional https picture + ≤ 10 menus; .vcf creates never carry media; every malformed value refused', async () => {
+  await contactsHome();
+  await assertSucceeds(setDoc(cnPath(db(MEMBER_WIFE), 'rest01'), cnDoc(MEMBER_WIFE, { categoryIds: ['s_restaurants'], avatarUrl: AV, menus: MENUS })), 'member: picture + 4 menus');
+  await assertSucceeds(setDoc(cnPath(db(MEMBER_WIFE), 'old001'), cnDoc(MEMBER_WIFE)), 'older-client shape (no media keys) still accepted');
+  await assertSucceeds(setDoc(cnPath(db(MEMBER_WIFE), 'nul001'), cnDoc(MEMBER_WIFE, { avatarUrl: null, menus: [] })), 'explicit empty media');
+  await assertSucceeds(setDoc(cnPath(db(MEMBER_WIFE), 'ten001'), cnDoc(MEMBER_WIFE, { menus: Array.from({ length: 10 }, (_, i) => MN('image', 'x'.repeat(40), `https://a.example/${'p'.repeat(470)}${i}`)) })), '10 menus at the label / url limits');
+  await assertSucceeds(setDoc(cnPath(db(MEMBER_WIFE), 'url500'), cnDoc(MEMBER_WIFE, { avatarUrl: `https://a.example/${'x'.repeat(482)}` })), '500-character picture URL');
+  await assertDenied(setDoc(cnPath(db(MEMBER_WIFE), 'vc_media01'), cnDoc(MEMBER_WIFE, { source: 'vcf', avatarUrl: AV })), '.vcf create with a picture');
+  await assertDenied(setDoc(cnPath(db(MEMBER_WIFE), 'vc_media02'), cnDoc(MEMBER_WIFE, { source: 'vcf', menus: [] })), '.vcf create with a menus key');
+  await assertSucceeds(setDoc(cnPath(db(MEMBER_WIFE), 'vc_media03'), cnDoc(MEMBER_WIFE, { source: 'vcf' })), '.vcf create without media');
+  const badAvatar = ['http://cdn.example.com/a.png', 'javascript:alert(1)', 'data:image/png;base64,AAAA', 'https://user:pw@cdn.example.com/a.png', 'https://a.example@evil.example/',
+    'https://127.0.0.1/a.png', 'https://192.168.1.1/', 'https://localhost/a.png', 'https://[::1]/a.png', 'https://CDN.example.com/a.png', 'https://a.example/a b.png',
+    'https://a.example/"><img src=x onerror=alert(1)>', 'https://a.example/a|b', `https://a.example/${'x'.repeat(483)}`, '', 42, ['https://a.example/'], { url: AV }];
+  for (const v of badAvatar) await assertDenied(setDoc(cnPath(db(OWNER_A), 'bad001'), cnDoc(OWNER_A, { avatarUrl: v })), `avatarUrl ${JSON.stringify(v).slice(0, 60)}`);
+  const badMenus = [Array.from({ length: 11 }, () => MENUS[0]), [MN('image', 'x'.repeat(41), 'https://a.example/a.jpg')], [MN('exe', '', 'https://a.example/a')],
+    [MN('image', '', 'http://a.example/a.jpg')], [MN('image', '', 'javascript:alert(1)')], ['image|https://a.example/a.jpg'], [MN('image', '', 'https://a.example/a|b')],
+    [MN('image', '', `https://a.example/${'x'.repeat(483)}`)], [MN('image', 'a\nb', 'https://a.example/a.jpg')], [{ kind: 'image', label: '', url: 'https://a.example/a.jpg' }],
+    [7], 'image||https://a.example/a.jpg', { 0: MENUS[0] }];
+  for (const v of badMenus) await assertDenied(setDoc(cnPath(db(OWNER_A), 'bad002'), cnDoc(OWNER_A, { menus: v })), `menus ${JSON.stringify(v).slice(0, 60)}`);
+  await assertDenied(setDoc(cnPath(db(OWNER_A), 'bad003'), cnDoc(OWNER_A, { avatar: AV })), 'unknown key');
+  await assertDenied(setDoc(cnPath(db(OWNER_A), 'bad004'), cnDoc(OWNER_A, { photoData: 'iVBORw0KGgo=' })), 'no binary / base64 field');
+  for (const u of [VIEWER_A, CHILD_A]) await assertDenied(setDoc(cnPath(db(u), `m${u.uid}`), cnDoc(u, { avatarUrl: AV })), `${u.uid} cannot create`);
+});
+
+test('V64C-2 contact media edits: contacts.edit + rev + 1 (stale refused); malicious direct writes refused; deleted contacts read-only', async () => {
+  await contactsHome();
+  await assertSucceeds(setDoc(cnPath(db(OWNER_A), 'rest01'), cnDoc(OWNER_A, { categoryIds: ['s_restaurants'], avatarUrl: AV, menus: MENUS })));
+  await assertSucceeds(cnUp(MEMBER_WIFE, 'rest01', { menus: [MENUS[1], MENUS[0]], rev: 2 }), 'member reorders menus');
+  await assertDenied(cnUp(ADMIN_A, 'rest01', { avatarUrl: null, rev: 2 }), 'stale revision (second device)');
+  await assertSucceeds(cnUp(ADMIN_A, 'rest01', { avatarUrl: null, rev: 3 }), 'remove picture');
+  await assertSucceeds(cnUp(ADMIN_A, 'rest01', { avatarUrl: 'https://cdn.example.com/new.png', rev: 4 }), 'replace picture');
+  await assertSucceeds(cnUp(ADMIN_A, 'rest01', { menus: [], rev: 5 }), 'remove all menus');
+  for (const u of [VIEWER_A, CHILD_A]) await assertDenied(cnUp(u, 'rest01', { avatarUrl: AV, rev: 6 }), `${u.uid} cannot change the picture`);
+  await assertDenied(cnUp(VIEWER_A, 'rest01', { menus: MENUS, rev: 6 }), 'viewer cannot change menus');
+  for (const [x, why] of [[{ avatarUrl: 'javascript:alert(1)' }, 'executable scheme'], [{ avatarUrl: 'https://u:p@a.example/' }, 'credentials'], [{ menus: ['image||http://a.example/x.jpg'] }, 'http menu'],
+    [{ menus: Array.from({ length: 11 }, () => MENUS[0]) }, '11 menus'], [{ avatarUrl: `https://a.example/${'x'.repeat(483)}` }, 'oversized'], [{ photo: 'AAAA' }, 'unknown key']])
+    await assertDenied(cnUp(MEMBER_WIFE, 'rest01', { ...x, rev: 6 }), `malicious direct write: ${why}`);
+  await assertDenied(updateDoc(cnPath(db(MEMBER_WIFE), 'rest01'), { avatarUrl: AV, rev: 6, updatedBy: OWNER_A.uid, updatedAt: serverTimestamp() }), 'forged editor');
+  await assertDenied(cnUp(ADMIN_A, 'rest01', { deleted: true, deletedAt: serverTimestamp(), deletedBy: ADMIN_A.uid, avatarUrl: AV, rev: 6 }), 'delete path cannot change media');
+  await assertSucceeds(cnUp(ADMIN_A, 'rest01', { deleted: true, deletedAt: serverTimestamp(), deletedBy: ADMIN_A.uid, rev: 6 }));
+  await assertDenied(cnUp(OWNER_A, 'rest01', { avatarUrl: AV, rev: 7 }), 'a deleted contact is read-only');
+});
+
+test('V64C-3 compatibility: an OLDER client (6.4.0-b field patches, delete / restore) never erases media; media survives every other write', async () => {
+  await contactsHome();
+  await assertSucceeds(setDoc(cnPath(db(OWNER_A), 'rest01'), cnDoc(OWNER_A, { categoryIds: ['s_restaurants'], avatarUrl: AV, menus: MENUS })));
+  // the exact writes a 6.4.0-b client makes: content field patches, favourite, category change, delete, restore
+  await assertSucceeds(cnUp(MEMBER_WIFE, 'rest01', { name: 'Pizza Place', organization: 'Pizza Co', rev: 2 }));
+  await assertSucceeds(cnUp(MEMBER_WIFE, 'rest01', { favorite: true, rev: 3 }));
+  await assertSucceeds(cnUp(MEMBER_WIFE, 'rest01', { categoryIds: [], rev: 4 }), 'Restaurants un-assigned (menus hidden, kept)');
+  await assertSucceeds(cnUp(ADMIN_A, 'rest01', { deleted: true, deletedAt: serverTimestamp(), deletedBy: ADMIN_A.uid, rev: 5 }));
+  await assertSucceeds(cnUp(ADMIN_A, 'rest01', { deleted: false, deletedAt: null, deletedBy: null, rev: 6 }));
+  await assertSucceeds(cnUp(MEMBER_WIFE, 'rest01', { categoryIds: ['s_restaurants'], rev: 7 }), 'reassigned');
+  const d = await dataOf(OWNER_A, 'rest01');
+  assert.deepEqual([d.avatarUrl, d.menus, d.rev, d.organization], [AV, MENUS, 7, 'Pizza Co'], 'media untouched by all older-client writes');
+  // an older client re-importing a vCard onto the same id is create-only → refused, nothing overwritten
+  // (a denied write is atomic: nothing of it is applied)
+  await assertDenied(setDoc(cnPath(db(MEMBER_WIFE), 'rest01'), cnDoc(MEMBER_WIFE, { source: 'vcf' })), 'set over an existing contact');
+});
+
+test('V64C-4 contact media tenant isolation: other Homes / outsiders can neither read nor write pictures and menus', async () => {
+  await contactsHome();
+  await assertSucceeds(setDoc(cnPath(db(OWNER_A), 'rest01'), cnDoc(OWNER_A, { avatarUrl: AV, menus: MENUS })));
+  await assertDenied(getDoc(cnPath(db(OWNER_HOME_B), 'rest01')), 'owner of another Home reads');
+  await assertDenied(cnUp(OWNER_HOME_B, 'rest01', { avatarUrl: 'https://evil.example/x.png', rev: 2 }), 'owner of another Home replaces the picture');
+  await assertDenied(cnUp(OWNER_HOME_B, 'rest01', { menus: [], rev: 2 }), 'owner of another Home erases menus');
+  await assertDenied(setDoc(cnPath(db(OWNER_HOME_B), 'evil01'), cnDoc(OWNER_HOME_B, { avatarUrl: 'https://evil.example/t.png' })), 'plants a contact');
+  await assertDenied(getDoc(cnPath(db(MALLORY), 'rest01')), 'non-member'); await assertDenied(getDoc(cnPath(anon(), 'rest01')), 'unauthenticated');
+  await assertDenied(cnUp(MALLORY, 'rest01', { avatarUrl: null, rev: 2 }), 'non-member edit');
+});
+
+test('V64C-5 (rev 2) menus: EVERY element validated on its own — combined, split, shifted, smuggled and empty elements refused (create AND update)', async () => {
+  await contactsHome();
+  const ok = 'https://a.example/1.jpg'; const ok2 = 'https://b.example/menu.pdf';
+  const bad = {
+    'two entries combined in one element': [MN('image', 'a', ok) + '|' + MN('pdf', 'b', ok2)],
+    'one entry split across two elements': ['image', 'a|' + ok],
+    'one entry split three ways': ['image', 'a', ok],
+    'kind|label then url': ['image|a', ok],
+    '11 entries smuggled into 6 elements': [...Array.from({ length: 5 }, () => MN('image', '', ok) + '|' + MN('image', '', ok)), MN('image', '', ok)],
+    'trailing separator': [MN('image', 'a', ok) + '|'], 'leading separator': ['|' + MN('image', 'a', ok)], 'extra field': [MN('image', 'a', ok) + '|x'],
+    'pipe in label': ['image|a|b|' + ok], 'empty element': [''], 'empty after valid': [MN('image', 'a', ok), ''], 'separators only': ['||'], 'kind only': ['image||'],
+    'null element': [MN('image', 'a', ok), null], 'map element': [{ kind: 'image', label: '', url: ok }], 'number element': [7],
+    'local host in 2nd element': [MN('image', 'a', ok), MN('web', 'r', 'https://router.local/')], 'wildcard-DNS host': [MN('image', 'a', 'https://10.0.0.1.nip.io/x.jpg')],
+    'localhost subdomain': [MN('web', '', 'https://admin.localhost/')], 'home.arpa': [MN('web', '', 'https://nas.home.arpa/')],
+  };
+  for (const [why, menus] of Object.entries(bad)) await assertDenied(setDoc(cnPath(db(OWNER_A), 'adv001'), cnDoc(OWNER_A, { menus })), `create: ${why}`);
+  await assertSucceeds(setDoc(cnPath(db(OWNER_A), 'adv002'), cnDoc(OWNER_A, { menus: [MN('image', 'https://router.local', ok)] })), 'a label that only LOOKS like a local URL is text');
+  await assertSucceeds(setDoc(cnPath(db(OWNER_A), 'adv003'), cnDoc(OWNER_A, { menus: Array.from({ length: 10 }, (_, i) => MN('image', (i % 2 ? 'ق' : '😀').repeat(40), `https://a.example/${'p'.repeat(481)}${i}`)) })), '10 entries at every limit');
+  let rev = 1;
+  for (const [why, menus] of Object.entries(bad)) await assertDenied(cnUp(MEMBER_WIFE, 'adv002', { menus, rev: rev + 1 }), `update: ${why}`);
+  await assertSucceeds(cnUp(MEMBER_WIFE, 'adv002', { menus: [MN('pdf', 'Full', ok2), MN('image', 'p1', ok)], rev: ++rev }), 'valid update still works');
+});
+
+test('V64C-6 (rev 2) picture URL: local-network suffixes and wildcard-DNS hosts refused; look-alike public names accepted', async () => {
+  await contactsHome();
+  for (const u of ['https://foo.localhost/a.png', 'https://printer.local/a.png', 'https://nas.home.arpa/a.png', 'https://router.home/a.png', 'https://db.internal/a.png',
+    'https://srv.lan/a.png', 'https://app.corp/a.png', 'https://x.private/a.png', 'https://a.localdomain/a.png', 'https://wiki.intranet/a.png',
+    'https://192.168.1.1.nip.io/a.png', 'https://127-0-0-1.sslip.io/a.png', 'https://10.0.0.1.xip.io/a.png', 'https://localtest.me/a.png', 'https://x.lvh.me/a.png', 'https://printer.local:8443/a.png'])
+    await assertDenied(setDoc(cnPath(db(OWNER_A), 'host01'), cnDoc(OWNER_A, { avatarUrl: u })), u);
+  for (const [i, u] of ['https://localhost.example/a.png', 'https://myhome.example/a.png', 'https://local.example.com/a.png', 'https://cdn.example.com/home/a.png'].entries())
+    await assertSucceeds(setDoc(cnPath(db(OWNER_A), `host1${i}`), cnDoc(OWNER_A, { avatarUrl: u })), u);
+});

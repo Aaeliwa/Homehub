@@ -1,5 +1,32 @@
 # Changelog
 
+## 6.4.0-c — V6.4 Batch C: contact pictures and restaurant menus, Revision 2 (November 2026) — NOT DEPLOYED, awaiting review
+
+- **Contact pictures:**
+  - An optional https picture link on every contact, shown as a circular avatar in the list and details.
+  - The editor previews the picture and lets you replace or remove it.
+  - Missing, invalid or broken pictures fall back to initials.
+  - Pictures load lazily, with no referrer, and are never uploaded.
+- **Restaurant menus:** contacts in the Restaurants category show a Menu section with up to 10 ordered links (image, PDF, website or Google Drive / Docs), each with an optional label.
+  - Nothing loads until you open the section.
+  - Image menus have thumbnails and a full-screen viewer: previous / next, swipe (mirrored in Arabic), pinch, double-tap and button zoom, pan, a page counter, Open original, and Esc or Back to close.
+  - Google Drive / Docs files can be previewed in a sandboxed frame.
+  - Other PDFs and websites open in a new tab.
+  - Renaming the category keeps the menus. Removing or un-assigning it hides the section but keeps the links.
+- **Data and security:**
+  - Two optional keys, `avatarUrl` and `menus`, on contacts. No migration is needed, and older contacts are untouched.
+  - Strict rules: one URL grammar shared by the client and the rules, bounded sizes, `contacts.edit`, `rev + 1`, and no media through `.vcf`.
+  - Imports, merges and 6.4.0-b clients can never erase media.
+  - The CSP `frame-src` allows `drive.google.com` and `docs.google.com` in addition to YouTube.
+- vCard import still skips `PHOTO` and similar fields, and fetches nothing. vCard export intentionally excludes pictures and menus.
+
+- **Revision 2 (independent review):**
+  - The Firestore rules validate every menu element on its own, by index (anchored format and length patterns). Combined, split, shifted and empty elements are refused.
+  - A joined string is used only for the negative host deny check, after every element has passed.
+  - Picture and menu links on local-network host names (`.localhost`, `.local`, `.home`, `.home.arpa`, `.internal`, `.lan`, `.corp` and others) or wildcard-DNS services (`nip.io` and others) are refused, both by the client and by the rules.
+  - The documentation now states plainly what a syntactic check cannot do (DNS, redirects).
+  - The full-screen viewer has a single history controller. Closing, repeated opening, Android Back, a module change, a household change, sign-out and re-renders all leave no overlay, listener or temporary history marker behind.
+
 ## 6.4.0-b — V6.4 Batch B: Shared Contacts, Revision 2 (November 2026) — NOT DEPLOYED, awaiting review
 
 - New **Contacts** module (mobile dock, desktop rail and Tools): one shared directory per Home.

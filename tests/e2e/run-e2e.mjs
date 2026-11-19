@@ -3981,6 +3981,331 @@ await check('V640-B Contacts: dock + Tools entry · add (Arabic, labelled phones
   assert.equal(page.errors.length, err0, `no page errors: ${page.errors.slice(err0).join(' | ')}`);
 });
 
+// =================================================================== V6.4 Batch C — contact pictures + restaurant menus
+const MEDIA = 'https://media.hh-e2e.test';
+const svg = (w, h, c) => `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}"><rect width="${w}" height="${h}" fill="${c}"/><circle cx="${w / 2}" cy="${h / 2}" r="${Math.min(w, h) / 4}" fill="#fff"/></svg>`;
+async function mediaRoutes(ctx, log) {
+  await ctx.route(`${MEDIA}/**`, (r) => {
+    const u = new URL(r.request().url()); log.push(u.pathname);
+    if (u.pathname.startsWith('/ok/') && u.pathname.endsWith('.svg')) return r.fulfill({ status: 200, contentType: 'image/svg+xml', body: svg(600, 900, u.pathname.includes('m3') ? '#2a7' : '#c43') });
+    return r.fulfill({ status: 404, contentType: 'text/plain', body: 'gone' });
+  });
+  // Drive preview host: refuses to be framed (as a private / blocked file would) — the app must not claim success
+  await ctx.route('https://drive.google.com/**', (r) => { log.push(`drive:${new URL(r.request().url()).pathname}`); return r.fulfill({ status: 200, contentType: 'text/html', headers: { 'X-Frame-Options': 'DENY' }, body: '<p>blocked</p>' }); });
+}
+const C_MENUS = [`image|Page 1|${MEDIA}/ok/m1.svg`, `image|Page 2|${MEDIA}/broken/m2.svg`, `image||${MEDIA}/ok/m3.svg`, `pdf|Full menu|${MEDIA}/ok/menu.pdf`, `web|Website|${MEDIA}/site`,
+  'drive|Drive menu|https://drive.google.com/file/d/1AbCdEfGhIjKlMnOp/view'];
+async function seedC(p, H, lang = 'en') {
+  await p.evaluate(async ({ h, menus, media, lang }) => {
+    const { defaultRoles } = await import('/src/modules/index.js');
+    const now = new Date().toISOString();
+    window.__fake.set(`homes/${h}`, { name: 'Media Home', createdBy: 'UID_OWNER', currency: 'EGP', timezone: 'UTC', language: lang });
+    for (const r of defaultRoles()) window.__fake.set(`homes/${h}/roles/${r.id}`, { name: r.name, rank: r.rank, permissions: r.permissions, system: true, templateVersion: 9 });
+    window.__fake.set(`homes/${h}/members/UID_OWNER`, { uid: 'UID_OWNER', email: 'owner@example.com', displayName: 'Abdo', roleId: 'owner', status: 'active', joinedAt: now });
+    window.__fake.set(`homes/${h}/members/UID_MONA`, { uid: 'UID_MONA', email: 'mona@example.com', displayName: 'Mona', roleId: 'viewer', status: 'active', joinedAt: now });
+    const K = (key, order) => ({ name: null, key, order, rev: 1, createdBy: 'UID_OWNER', createdAt: now, updatedBy: 'UID_OWNER', updatedAt: now, schemaVersion: 1 });
+    window.__fake.set(`homes/${h}/contactCategories/s_restaurants`, K('restaurants', 0)); window.__fake.set(`homes/${h}/contactCategories/s_doctors`, K('doctors', 1));
+    const C = (name, x = {}) => ({ name, organization: null, email: null, address: null, notes: null, favorite: false, phones: ['mobile|+20 100 000 0001'], categoryIds: [], source: 'manual', deleted: false, deletedAt: null, deletedBy: null, rev: 1, createdBy: 'UID_OWNER', createdAt: now, updatedBy: 'UID_OWNER', updatedAt: now, schemaVersion: 1, ...x });
+    window.__fake.set(`homes/${h}/contacts/pizza01`, C('Pizza Place', { categoryIds: ['s_restaurants'], avatarUrl: `${media}/ok/pizza.svg`, menus, rev: 3 }));
+    window.__fake.set(`homes/${h}/contacts/broken1`, C('Broken Pic', { avatarUrl: `${media}/broken/face.svg` }));
+    window.__fake.set(`homes/${h}/contacts/old0001`, C('Old Contact', { categoryIds: ['s_doctors'] }));   // written before 6.4.0-c: no media keys
+    for (const u of ['UID_OWNER', 'UID_MONA']) window.__fake.patch(`users/${u}`, { defaultHomeId: h, language: lang });
+  }, { h: H, menus: C_MENUS, media: MEDIA, lang });
+}
+const cdoc = (p, H, id) => p.evaluate(({ h, id }) => window.__fake.dump()[`homes/${h}/contacts/${id}`], { h: H, id });
+
+await check('V640-C Contact pictures + restaurant menus: avatars (image / broken / missing) · no menu request before opening · image thumbnails + broken state · PDF / website open-only · sandboxed Drive preview never claimed successful · fullscreen viewer (counter, prev/next, keys, swipe, double-tap zoom, pan, Esc, Back) · editor preview / replace / remove / validation / reorder · category rename / removal / reassignment keeps menus · stale media edit refused · old contact untouched · export without media · viewer role read-only · 320–412', async () => {
+  await ensureSignedOut();
+  const H = 'hV64C'; const err0 = page.errors.length; const log = [];
+  await mediaRoutes(desktop, log);
+  await seedC(page, H);
+  const noOverflow = async (what) => assert.ok((await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)) <= 0, `${what}: no horizontal overflow`);
+  const menuReqs = () => log.filter((x) => /^\/(ok|broken)\/(m\d|menu)|^\/site|^drive:/.test(x));
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await login('owner@example.com'); await page.locator('.hero__home').waitFor();
+  await page.goto(BASE + '#/m/contacts'); await page.locator('#ct-list .ct-card').nth(2).waitFor();
+  // ---- avatars: picture, broken → initials, none → initials; lazy + no referrer
+  const av = (name) => page.locator(`.ct-card:has-text("${name}") .ct-avatar`);
+  await page.locator('.ct-card:has-text("Pizza Place") .ct-avatar[data-avatar=image]').waitFor();
+  await page.locator('.ct-card:has-text("Broken Pic") .ct-avatar[data-avatar=broken]').waitFor();
+  assert.equal(await av('Broken Pic').locator('img').count(), 0, 'broken picture removed');
+  assert.equal(await av('Broken Pic').innerText(), 'BP'); assert.equal(await av('Old Contact').getAttribute('data-avatar'), 'initials');
+  assert.deepEqual(await av('Pizza Place').locator('img').evaluate((i) => [i.getAttribute('loading'), i.referrerPolicy, i.getAttribute('alt')]), ['lazy', 'no-referrer', '']);
+  // ---- Menu section: no request until the user opens it
+  await page.locator('.ct-card:has-text("Pizza Place") .ct-card__open').click(); await page.locator('#ct-menu').waitFor();
+  assert.equal(await page.getAttribute('#ct-menu-toggle', 'aria-expanded'), 'false');
+  assert.equal(await page.locator('#ct-menu img, #ct-menu iframe').count(), 0);
+  await page.waitForTimeout(300); assert.deepEqual(menuReqs(), [], 'no menu request before opening');
+  await page.click('#ct-menu-toggle'); await page.locator('#ct-menu-list').waitFor();
+  assert.equal(await page.getAttribute('#ct-menu-toggle', 'aria-expanded'), 'true');
+  assert.deepEqual(await page.locator('.ct-menu-item').evaluateAll((els) => els.map((e) => e.dataset.how)), ['image', 'image', 'image', 'link', 'link', 'embed']);
+  await page.locator('#ct-menu-thumb-0[data-state=loaded]').waitFor(); await page.locator('#ct-menu-thumb-1[data-state=error]').waitFor();
+  assert.match(await page.locator('#ct-menu-thumb-1').innerText(), /could not be loaded/);
+  assert.ok(!menuReqs().some((x) => x.startsWith('drive:')), 'Drive is not contacted before "Show preview"');
+  for (const i of [0, 3, 4, 5]) assert.deepEqual(await page.locator(`#ct-menu-open-${i}`).evaluate((a) => [a.target, a.rel, a.referrerPolicy]), ['_blank', 'noopener noreferrer', 'no-referrer'], `safe link ${i}`);
+  assert.equal(await page.getAttribute('#ct-menu-open-3', 'href'), `${MEDIA}/ok/menu.pdf`);
+  assert.match(await page.locator('.ct-menu-item[data-index="3"]').innerText(), /PDFs open in a new tab/);
+  assert.match(await page.locator('.ct-menu-item[data-index="4"]').innerText(), /never embedded/);
+  // ---- Drive: sandboxed preview of the official /preview URL; a blocked frame is not reported as success
+  await page.click('#ct-menu-preview-5'); await page.locator('#ct-menu-frame-5').waitFor();
+  assert.deepEqual(await page.locator('#ct-menu-frame-5').evaluate((f) => [f.getAttribute('sandbox'), f.getAttribute('allow'), f.referrerPolicy, f.src]),
+    ['allow-scripts allow-same-origin', '', 'no-referrer', 'https://drive.google.com/file/d/1AbCdEfGhIjKlMnOp/preview']);
+  await page.waitForTimeout(400);
+  assert.ok(menuReqs().includes('drive:/file/d/1AbCdEfGhIjKlMnOp/preview'));
+  assert.match(await page.locator('.ct-menu-item[data-index="5"]').innerText(), /If the preview stays empty or asks you to sign in/);
+  assert.ok(!/loaded|success/i.test(await page.locator('.ct-menu-item[data-index="5"]').innerText()), 'no success claim from an iframe load');
+  await page.click('#ct-menu-preview-5'); assert.equal(await page.locator('#ct-menu-frame-5').count(), 0);
+  // ---- fullscreen viewer (images only: 3 pages)
+  const hash0 = await page.evaluate(() => location.hash);
+  await page.click('#ct-menu-thumb-0'); await page.locator('#ct-viewer').waitFor();
+  assert.equal(await page.locator('#ct-viewer-count').innerText(), '1 / 3');
+  assert.equal(await page.evaluate(() => document.activeElement.id), 'ct-viewer-close', 'focus moves into the viewer');
+  await page.locator('#ct-viewer-stage[data-state=loaded]').waitFor();
+  assert.equal(await page.locator('#ct-viewer-prev').isDisabled(), true);
+  await page.click('#ct-viewer-next'); assert.equal(await page.locator('#ct-viewer-count').innerText(), '2 / 3');
+  await page.locator('#ct-viewer-stage[data-state=error]').waitFor();
+  assert.match(await page.locator('#ct-viewer-status').innerText(), /could not be loaded/); assert.equal(await page.getAttribute('#ct-viewer-open', 'href'), `${MEDIA}/broken/m2.svg`);
+  await page.keyboard.press('ArrowRight'); assert.equal(await page.locator('#ct-viewer-count').innerText(), '3 / 3'); assert.equal(await page.locator('#ct-viewer-next').isDisabled(), true);
+  assert.ok(await page.evaluate(() => !!document.activeElement.closest('#ct-viewer') && !document.activeElement.disabled), 'focus not lost when Next becomes disabled');
+  await page.keyboard.press('ArrowLeft'); await page.keyboard.press('ArrowLeft'); assert.equal(await page.locator('#ct-viewer-count').innerText(), '1 / 3');
+  await page.click('#ct-viewer-zoomin'); assert.equal(await page.getAttribute('#ct-viewer', 'data-scale'), '1.5');
+  await page.keyboard.press('0'); assert.equal(await page.getAttribute('#ct-viewer', 'data-scale'), '1');
+  // swipe (pointer drag) → next page; double-tap → zoom; drag → pan
+  const box = await page.locator('#ct-viewer-stage').boundingBox(); const cx = box.x + box.width / 2; const cy = box.y + box.height / 2;
+  await page.mouse.move(cx + 120, cy); await page.mouse.down(); await page.mouse.move(cx - 60, cy, { steps: 6 }); await page.mouse.up();
+  assert.equal(await page.locator('#ct-viewer-count').innerText(), '2 / 3', 'swipe left → next');
+  await page.click('#ct-viewer-prev');
+  await page.mouse.click(cx, cy); await page.mouse.click(cx, cy);
+  assert.equal(await page.getAttribute('#ct-viewer', 'data-scale'), '2.5', 'double-tap zoom');
+  await page.mouse.move(cx, cy); await page.mouse.down(); await page.mouse.move(cx + 80, cy + 40, { steps: 5 }); await page.mouse.up();
+  assert.match(await page.locator('#ct-viewer-img').evaluate((i) => i.style.transform), /translate\(80px, 40px\) scale\(2\.5\)/, 'pan while zoomed');
+  assert.equal(await page.locator('#ct-viewer-count').innerText(), '1 / 3', 'a pan is not a swipe');
+  // focus trap + Esc
+  for (let k = 0; k < 12; k++) await page.keyboard.press('Tab');
+  assert.ok(await page.evaluate(() => !!document.activeElement.closest('#ct-viewer')), 'focus stays in the viewer');
+  await page.keyboard.press('Escape'); await page.locator('#ct-viewer').waitFor({ state: 'detached' });
+  assert.equal(await page.evaluate(() => document.activeElement.id), 'ct-menu-thumb-0', 'focus restored');
+  // Back closes the viewer and stays on the contact
+  await page.click('#ct-menu-thumb-2'); await page.locator('#ct-viewer').waitFor();
+  assert.equal(await page.locator('#ct-viewer-count').innerText(), '3 / 3', 'third image (the PDF / website / Drive entries are not pages)');
+  await page.goBack(); await page.locator('#ct-viewer').waitFor({ state: 'detached' });
+  assert.equal(await page.evaluate(() => location.hash), hash0); await page.locator('#ct-detail #ct-menu-list').waitFor();
+  // ---- layouts with the menu open and the viewer open
+  for (const w of [320, 360, 390, 412]) {
+    await page.setViewportSize({ width: w, height: 760 }); await page.waitForTimeout(80); await noOverflow(`menu ${w}`);
+    await page.click('#ct-menu-thumb-0'); await page.locator('#ct-viewer').waitFor();
+    for (const id of ['#ct-viewer-close', '#ct-viewer-next', '#ct-viewer-zoomin', '#ct-viewer-open']) { const b = await page.locator(id).boundingBox(); assert.ok(b && b.x >= 0 && b.x + b.width <= w + 0.5, `${id} visible at ${w}`); }
+    if (w === 360) await shot(page, '82-v640c-viewer-360');
+    await page.click('#ct-viewer-close'); await page.locator('#ct-viewer').waitFor({ state: 'detached' });
+  }
+  await shot(page, '83-v640c-menu-412');
+  await page.setViewportSize({ width: 1280, height: 800 });
+
+  // ---- editor: picture preview / validation / replace / remove; menus reorder / remove / add / validation
+  await page.click('#ct-edit'); await page.locator('#ct-form').waitFor();
+  assert.equal(await page.inputValue('#ct-f-avatar'), `${MEDIA}/ok/pizza.svg`);
+  await page.locator('#ct-f-avatar-preview .ct-avatar[data-avatar=image]').waitFor();
+  assert.equal(await page.locator('#ct-f-menus').isVisible(), true); assert.equal(await page.locator('.ct-edit-menu').count(), 6);
+  await page.fill('#ct-f-avatar', 'javascript:alert(1)'); await page.locator('#ct-f-avatar').dispatchEvent('change');
+  assert.match(await page.locator('#ct-f-avatar-msg').innerText(), /not allowed/);
+  await page.click('#ct-f-avatar-remove'); assert.equal(await page.inputValue('#ct-f-avatar'), '');
+  assert.equal(await page.locator('#ct-f-avatar-preview .ct-avatar').getAttribute('data-avatar'), 'initials');
+  await page.fill('#ct-f-avatar', `${MEDIA}/broken/new.svg`); await page.locator('#ct-f-avatar').dispatchEvent('change');
+  await page.locator('#ct-f-avatar-msg:has-text("could not be loaded")').waitFor();
+  await page.fill('#ct-f-avatar', `${MEDIA}/ok/new.svg`); await page.locator('#ct-f-avatar').dispatchEvent('change');
+  await page.locator('.ct-edit-menu').nth(2).locator('[data-role=up]').click();                 // page 3 before page 2
+  await page.locator('.ct-edit-menu').nth(2).locator('[data-role=remove]').click();             // remove the broken page 2
+  assert.equal(await page.locator('.ct-edit-menu').first().locator('[data-role=up]').isDisabled(), true);
+  await page.click('#ct-add-menu');
+  await page.locator('.ct-edit-menu').last().locator('[data-role=url]').fill('http://insecure.example/x.jpg');
+  await page.click('dialog[open] button[type=submit]');
+  await page.locator('dialog[open] :text("Only secure https:// links are allowed.")').waitFor();
+  await page.locator('.ct-edit-menu').last().locator('[data-role=label]').fill('Desserts');
+  await page.locator('.ct-edit-menu').last().locator('[data-role=url]').fill(`${MEDIA}/ok/m4.svg`);
+  await page.click('dialog[open] button[type=submit]'); await page.locator('#ct-form').waitFor({ state: 'detached' });
+  let d = await cdoc(page, H, 'pizza01');
+  assert.deepEqual([d.rev, d.avatarUrl], [4, `${MEDIA}/ok/new.svg`]);
+  assert.deepEqual(d.menus, [C_MENUS[0], C_MENUS[2], C_MENUS[3], C_MENUS[4], C_MENUS[5], `image|Desserts|${MEDIA}/ok/m4.svg`], 'order / removal / auto-detected kind');
+  // ---- stale media edit (another device saved first) → refused, nothing overwritten
+  await page.click('#ct-edit'); await page.locator('#ct-form').waitFor();
+  await page.evaluate((h) => { const k = `homes/${h}/contacts/pizza01`; const cur = window.__fake.dump()[k]; window.__fake.patch(k, { rev: cur.rev + 1, name: 'Pizza Place (other device)' }); }, H);
+  await page.click('#ct-f-avatar-remove');
+  await page.click('dialog[open] button[type=submit]'); await page.locator('dialog[open] :text("Someone else changed this contact")').waitFor();
+  await page.keyboard.press('Escape'); await page.locator('#ct-form').waitFor({ state: 'detached' });
+  d = await cdoc(page, H, 'pizza01'); assert.deepEqual([d.rev, d.avatarUrl, d.name], [5, `${MEDIA}/ok/new.svg`, 'Pizza Place (other device)']);
+  // ---- category lifecycle: rename keeps the menu; removal hides it (kept); suggested re-add = reassignment
+  await page.click('#ct-back'); await page.click('#ct-cats');
+  await page.locator('#ct-cat-list li[data-cat=s_restaurants] [data-action=rename]').click();
+  await page.fill('#ct-cat-name', 'Food & takeaway'); await page.click('dialog[open] button[type=submit]'); await page.locator('#ct-cat-form').waitFor({ state: 'detached' });
+  await page.click('#ct-cats-back'); await page.locator('.ct-card:has-text("Pizza Place") .ct-card__open').click();
+  await page.locator('#ct-menu').waitFor(); assert.match(await page.locator('#ct-detail').innerText(), /Food & takeaway/);
+  await page.click('#ct-back'); await page.click('#ct-cats');
+  await page.locator('#ct-cat-list li[data-cat=s_restaurants] [data-action=remove]').click(); await page.click('dialog[open] .btn--danger');
+  await page.locator('#ct-cat-list li[data-cat=s_restaurants]').waitFor({ state: 'detached' });
+  await page.click('#ct-cats-back'); await page.locator('.ct-card:has-text("Pizza Place") .ct-card__open').click(); await page.locator('#ct-detail').waitFor();
+  assert.equal(await page.locator('#ct-menu').count(), 0, 'no Restaurants category → no Menu section');
+  assert.equal((await cdoc(page, H, 'pizza01')).menus.length, 6, 'menu data kept');
+  await page.click('#ct-edit'); await page.locator('#ct-form').waitFor();
+  assert.equal(await page.locator('#ct-f-menus').isVisible(), false); assert.match(await page.locator('#ct-f-menus-kept').innerText(), /6 saved menu link/);
+  await page.keyboard.press('Escape'); await page.locator('#ct-form').waitFor({ state: 'detached' });
+  await page.click('#ct-back'); await page.click('#ct-cats'); await page.click('#ct-cat-suggest'); await page.locator('#ct-cat-list li[data-cat=s_restaurants]').waitFor();
+  await page.click('#ct-cats-back'); await page.locator('.ct-card:has-text("Pizza Place") .ct-card__open').click();
+  await page.locator('#ct-menu').waitFor(); assert.match(await page.locator('#ct-menu-toggle').innerText(), /Show menu \(6\)/, 'reassigned → menu back, unchanged');
+  // ---- an old contact (no media keys): open + save writes nothing; detail shows initials, no menu
+  await page.click('#ct-back'); await page.locator('.ct-card:has-text("Old Contact") .ct-card__open').click();
+  assert.equal(await page.locator('#ct-menu').count(), 0); assert.equal(await page.getAttribute('#ct-avatar', 'data-avatar'), 'initials');
+  await page.click('#ct-edit'); await page.click('dialog[open] button[type=submit]'); await page.locator('#ct-form').waitFor({ state: 'detached' });
+  d = await cdoc(page, H, 'old0001'); assert.deepEqual([d.rev, 'avatarUrl' in d, 'menus' in d], [1, false, false]);
+  // ---- export of a restaurant: vCard without picture / menu data
+  await page.click('#ct-back'); await page.locator('.ct-card:has-text("Pizza Place") .ct-card__open').click();
+  await page.click('#ct-export-one'); await page.locator('dialog[open][role=alertdialog]').waitFor();
+  const dl = page.waitForEvent('download'); await page.click('dialog[open] .btn--primary'); const vcf = readFileSync(await (await dl).path(), 'utf8');
+  assert.match(vcf, /^BEGIN:VCARD\r\nVERSION:3\.0\r\n/); assert.ok(!/PHOTO|LOGO|URL|media\.hh-e2e|drive\.google/.test(vcf), 'media intentionally excluded');
+  await logout();
+  // ---- viewer role: sees pictures and can view menus; cannot edit
+  await login('mona@example.com'); await page.locator('.hero__home').waitFor();
+  await page.goto(BASE + '#/m/contacts'); await page.locator('.ct-card:has-text("Pizza Place") .ct-avatar[data-avatar=image]').waitFor();
+  await page.locator('.ct-card:has-text("Pizza Place") .ct-card__open').click(); await page.click('#ct-menu-toggle'); await page.locator('#ct-menu-thumb-0').waitFor();
+  assert.equal(await page.locator('#ct-edit').count(), 0, 'no editor for viewers');
+  await logout();
+  await desktop.unroute(`${MEDIA}/**`); await desktop.unroute('https://drive.google.com/**');
+  assert.equal(page.errors.length, err0, `no page errors: ${page.errors.slice(err0).join(' | ')}`);
+});
+
+await check('V640-C mobile (touch, Arabic RTL, dark, 360): swipe direction mirrored, pinch zoom, Back exits fullscreen, no overflow', async () => {
+  const ctx = await browser.newContext({ viewport: { width: 360, height: 760 }, isMobile: true, hasTouch: true, colorScheme: 'dark' });
+  const p = await newPage(ctx); const log = []; await mediaRoutes(ctx, log);
+  await p.goto(BASE); await p.locator('#login-email').waitFor();
+  await seedC(p, 'hV64Cm', 'ar');
+  await p.fill('#login-email', 'owner@example.com'); await p.fill('#login-password', 'correct-horse'); await p.click('button[type=submit]');
+  await p.locator('.hero__home').waitFor();
+  await p.goto(BASE + '#/m/contacts'); await p.locator('.ct-card').first().waitFor();
+  await p.waitForFunction(() => document.documentElement.dir === 'rtl');
+  await p.locator('.ct-card:has-text("Pizza Place") .ct-card__open').click(); await p.click('#ct-menu-toggle'); await p.locator('#ct-menu-thumb-0').waitFor();
+  assert.ok((await p.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)) <= 0, 'no overflow (RTL, menu open)');
+  await p.locator('#ct-menu-thumb-0').tap(); await p.locator('#ct-viewer').waitFor();
+  assert.equal(await p.getAttribute('#ct-viewer', 'dir'), 'rtl');
+  const cdp = await ctx.newCDPSession(p);
+  const b = await p.locator('#ct-viewer-stage').boundingBox(); const cx = b.x + b.width / 2; const cy = b.y + b.height / 2;
+  const touch = async (type, points) => cdp.send('Input.dispatchTouchEvent', { type, touchPoints: points.map(([x, y], id) => ({ x, y, id })) });
+  // RTL: swiping RIGHT moves to the next page
+  await touch('touchStart', [[cx - 100, cy]]); for (let k = 1; k <= 6; k++) await touch('touchMove', [[cx - 100 + k * 30, cy]]); await touch('touchEnd', []);
+  assert.equal(await p.locator('#ct-viewer-count').innerText(), '2 / 3', 'RTL swipe right → next');
+  await touch('touchStart', [[cx + 100, cy]]); for (let k = 1; k <= 6; k++) await touch('touchMove', [[cx + 100 - k * 30, cy]]); await touch('touchEnd', []);
+  assert.equal(await p.locator('#ct-viewer-count').innerText(), '1 / 3', 'RTL swipe left → previous');
+  // pinch out → zoom in
+  await touch('touchStart', [[cx - 20, cy], [cx + 20, cy]]); for (let k = 1; k <= 6; k++) await touch('touchMove', [[cx - 20 - k * 15, cy], [cx + 20 + k * 15, cy]]); await touch('touchEnd', []);
+  assert.ok(Number(await p.getAttribute('#ct-viewer', 'data-scale')) > 2, 'pinch zoom');
+  assert.equal(await p.locator('#ct-viewer-count').innerText(), '1 / 3', 'pinch does not change page');
+  await shot(p, '84-v640c-viewer-ar-dark-360');
+  await p.goBack(); await p.locator('#ct-viewer').waitFor({ state: 'detached' });
+  await p.locator('#ct-detail').waitFor();
+  assert.ok((await p.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)) <= 0, 'no overflow after closing');
+  assert.deepEqual(p.errors, []);
+  await ctx.close();
+});
+
+await check('V640-C rev 2 viewer lifecycle: repeated open / close (button, Esc, Back, rapid reopen) leaves no overlay, listener or history entry; module navigation, household context change and sign-out while open clean up completely', async () => {
+  await ensureSignedOut();
+  const H = 'hV64CL'; const err0 = page.errors.length; const log = [];
+  await mediaRoutes(desktop, log); await seedC(page, H);
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await login('owner@example.com'); await page.locator('.hero__home').waitFor();
+  const cdp = await desktop.newCDPSession(page);
+  const listeners = async () => {
+    const n = async (expr, type) => { const { result } = await cdp.send('Runtime.evaluate', { expression: expr }); const { listeners: l } = await cdp.send('DOMDebugger.getEventListeners', { objectId: result.objectId }); return l.filter((x) => x.type === type).length; };
+    return { keydown: await n('document', 'keydown'), popstate: await n('window', 'popstate') };
+  };
+  const vstate = () => page.evaluate(async () => (await import('/src/modules/contacts/media-ui.js')).viewerState());
+  const clean = async (why) => {
+    await page.waitForFunction(() => !document.getElementById('ct-viewer'));
+    assert.equal(await page.locator('#ct-viewer, .ct-viewer').count(), 0, `${why}: no overlay`);
+    assert.equal(await page.evaluate(() => document.documentElement.classList.contains('ct-viewer-open')), false, `${why}: scroll lock released`);
+    await page.waitForFunction(() => !(history.state && history.state.ctViewer), null, { timeout: 3000 });
+    const st = await vstate(); assert.deepEqual(st, { open: false, pendingBacks: 0, queued: 0 }, `${why}: controller idle`);
+  };
+  const openMenu = async () => {
+    await page.goto(BASE + '#/m/contacts'); await page.locator('.ct-card:has-text("Pizza Place") .ct-card__open').click();
+    await page.click('#ct-menu-toggle'); await page.locator('#ct-menu-thumb-0').waitFor();
+  };
+  const openViewer = async (k = 0) => { await page.click(`#ct-menu-thumb-${k}`); await page.locator('#ct-viewer').waitFor(); };
+  await openMenu();
+  // ---- baseline after one full cycle (the module's single popstate handler is installed on first open)
+  await openViewer(); await page.click('#ct-viewer-close'); await clean('first close');
+  const len0 = await page.evaluate(() => history.length); const l0 = await listeners();
+  // ---- repeated cycles: button, Esc, Back, swipe-then-Esc, rapid close + reopen
+  for (let k = 0; k < 3; k++) {
+    await openViewer(); await page.click('#ct-viewer-close'); await clean(`button #${k}`);
+    await openViewer(2); await page.keyboard.press('Escape'); await clean(`Esc #${k}`);
+    await openViewer(); await page.goBack(); await clean(`Back #${k}`);
+    assert.match(await page.evaluate(() => location.hash), /#\/m\/contacts/, 'Back never left the contact');
+    await page.locator('#ct-detail').waitFor();
+  }
+  // rapid: close and reopen before the close's history.back() is processed → exactly one live entry
+  await openViewer(); await page.evaluate(() => { document.getElementById('ct-viewer-close').click(); document.getElementById('ct-menu-thumb-0').click(); });
+  await page.locator('#ct-viewer').waitFor(); await page.waitForTimeout(300);
+  assert.equal(await page.locator('.ct-viewer').count(), 1, 'one overlay'); assert.equal(await page.evaluate(() => !!(history.state && history.state.ctViewer)), true, 'reopened viewer owns an entry');
+  await page.goBack(); await clean('Back after rapid reopen');
+  // handover: opening while open never stacks a second overlay or entry
+  await openViewer(); await page.evaluate(async () => { const m = await import('/src/modules/contacts/media-ui.js'); m.openImageViewer([{ url: 'https://media.hh-e2e.test/ok/m3.svg', label: 'x' }], 0); });
+  assert.equal(await page.locator('.ct-viewer').count(), 1); await page.keyboard.press('Escape'); await clean('handover');
+  assert.equal(await page.evaluate(() => history.length), len0, 'no history growth across 11 open / close cycles');
+  assert.deepEqual(await listeners(), l0, 'no keydown / popstate listener leak');
+  // ---- navigation to another module while open (e.g. a deep link / notification)
+  await openViewer(); await page.evaluate(() => { location.hash = '#/dashboard'; }); await page.locator('.hero__home').waitFor();
+  assert.equal(await page.locator('#ct-viewer').count(), 0, 'module change: overlay gone');
+  assert.equal(await page.evaluate(() => document.documentElement.classList.contains('ct-viewer-open')), false);
+  await page.keyboard.press('Escape'); await page.keyboard.press('ArrowRight');                 // no stale key handler
+  await page.goBack(); await page.locator('#ct-page').waitFor(); await page.waitForTimeout(200);
+  assert.equal(await page.locator('#ct-viewer').count(), 0, 'Back onto the old viewer entry never reopens it');
+  await clean('after module navigation + Back');
+  assert.deepEqual(await listeners(), l0, 'no listener leak after module navigation');
+  // ---- household context change while open (membership suspended → re-resolution → gate → restored)
+  await openMenu(); await openViewer();
+  await page.evaluate((h) => window.__fake.patch(`homes/${h}/members/UID_OWNER`, { status: 'suspended' }), H);
+  await page.locator('.gate__code', { hasText: 'MEMBERSHIP_INACTIVE' }).waitFor();
+  await clean('household context change');
+  await page.evaluate((h) => window.__fake.patch(`homes/${h}/members/UID_OWNER`, { status: 'active' }), H);
+  await page.click('text=Try again'); await page.locator('#ct-page').waitFor();   // back on the same route
+  assert.equal(await page.locator('#ct-viewer').count(), 0, 'the viewer does not come back with the restored context');
+  assert.deepEqual(await listeners(), l0, 'no listener leak after the household change');
+  // ---- sign-out while open (e.g. signed out on another device / token expiry)
+  await openMenu(); await openViewer();
+  await page.evaluate(async () => { const a = await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js'); await a.signOut(a.getAuth()); });
+  await page.locator('#login-email').waitFor();
+  await clean('sign-out');
+  await page.keyboard.press('Escape');
+  assert.equal(await page.evaluate(() => location.hash), '#/dashboard', 'next sign-in starts on the dashboard (unchanged behaviour)');
+  await login('owner@example.com'); await page.locator('.hero__home').waitFor();
+  assert.deepEqual(await listeners(), l0, 'no listener leak after sign-out / sign-in');
+  await openMenu(); await openViewer(); await page.click('#ct-viewer-next'); assert.equal(await page.locator('#ct-viewer-count').innerText(), '2 / 3', 'still fully functional');
+  await page.goBack(); await clean('final');
+  await cdp.detach(); await logout();
+  await desktop.unroute(`${MEDIA}/**`); await desktop.unroute('https://drive.google.com/**');
+  assert.equal(page.errors.length, err0, `no page errors: ${page.errors.slice(err0).join(' | ')}`);
+});
+
+await check('V640-C rev 2 viewer lifecycle on Android-style mobile (touch, Arabic RTL): hardware Back closes, repeated cycles leave nothing behind', async () => {
+  const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+  const p = await newPage(ctx); const log = []; await mediaRoutes(ctx, log);
+  await p.goto(BASE); await p.locator('#login-email').waitFor(); await seedC(p, 'hV64CLm', 'ar');
+  await p.fill('#login-email', 'owner@example.com'); await p.fill('#login-password', 'correct-horse'); await p.click('button[type=submit]'); await p.locator('.hero__home').waitFor();
+  await p.goto(BASE + '#/m/contacts'); await p.locator('.ct-card:has-text("Pizza Place") .ct-card__open').tap();
+  await p.locator('#ct-menu-toggle').tap(); await p.locator('#ct-menu-thumb-0').waitFor();
+  const len0 = await p.evaluate(() => history.length);
+  for (let k = 0; k < 4; k++) {
+    await p.locator(`#ct-menu-thumb-${k % 2 ? 2 : 0}`).tap(); await p.locator('#ct-viewer').waitFor();
+    assert.equal(await p.getAttribute('#ct-viewer', 'dir'), 'rtl');
+    await p.goBack(); await p.waitForFunction(() => !document.getElementById('ct-viewer') && !document.documentElement.classList.contains('ct-viewer-open'));
+    await p.locator('#ct-detail').waitFor();
+  }
+  assert.equal(await p.evaluate(() => history.length), len0 + 1, 'one reusable forward entry at most (back/forward stack, no growth)');
+  assert.equal(await p.evaluate(() => !!(history.state && history.state.ctViewer)), false);
+  assert.ok((await p.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)) <= 0);
+  assert.deepEqual(p.errors, []);
+  await ctx.close();
+});
+
 await check('ADV-NIGHT routine day honours stored startHour during 00:00–03:00; no wrong-day or duplicate routine on a new session', async () => {
   await ensureSignedOut();
   const H = 'hAdvNight';
