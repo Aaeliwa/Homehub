@@ -1,0 +1,93 @@
+name: HomeHub Verification
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verification:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout HomeHub
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Unit and static tests
+        run: |
+          set -o pipefail
+          npm test 2>&1 | tee unit-results.txt
+
+      - name: Rules smoke tests
+        run: |
+          set -o pipefail
+          NODE_OPTIONS="--test-reporter=tap" \
+          npm run test:rules:smoke 2>&1 | tee smoke-results.txt
+
+      - name: Rules cost
+        run: |
+          set -o pipefail
+          npm run rules:cost 2>&1 | tee cost-results.txt
+
+      - name: Normal Firestore emulator
+        run: |
+          set -o pipefail
+          npm run test:rules 2>&1 | tee emulator-normal.txt
+
+      - name: Normal rules limits
+        run: |
+          set -o pipefail
+          npm run rules:limits -- emulator-normal.txt 2>&1 | tee limits-normal.txt
+
+      - name: Strict Firestore emulator
+        run: |
+          set -o pipefail
+          npm run test:rules:strict 2>&1 | tee emulator-strict.txt
+
+      - name: Strict rules limits
+        run: |
+          set -o pipefail
+          npm run rules:limits -- emulator-strict.txt 2>&1 | tee limits-strict.txt
+
+      - name: Install Playwright
+        run: npm install --no-save --package-lock=false playwright
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Browser E2E tests
+        run: |
+          set -o pipefail
+          npm run test:e2e 2>&1 | tee e2e-results.txt
+
+      - name: Upload verification reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: homehub-verification-reports
+          retention-days: 14
+          path: |
+            unit-results.txt
+            smoke-results.txt
+            cost-results.txt
+            emulator-normal.txt
+            emulator-strict.txt
+            limits-normal.txt
+            limits-strict.txt
+            e2e-results.txt
