@@ -1,0 +1,32 @@
+v5.7.2 r2 — changed files relative to the SHIPPED HomeHub-V5-Phase5.3.1.zip (v5.7.1)
+r2 vs the first v5.7.2 patch: tests/rules/rules.test.mjs (H2 corrected), PHASE-5.3.2-R2-CHANGE-REPORT.md (new), TESTING.md (note).
+App code and firestore.rules are identical to the first v5.7.2 patch.
+
+ADDED
+PHASE-5.3.2-CHANGED-FILES.txt
+PHASE-5.3.2-R2-CHANGE-REPORT.md
+PHASE-5.3.2-ROOT-CAUSE-REPORT.md
+tests/rules/diagnose-setup.mjs
+tests/unit/cleaning-setup-hotfix.test.mjs
+
+MODIFIED
+CHANGELOG.md
+PROJECT-STATE.md
+TESTING.md
+assets/css/modules/cleaning.css
+firestore.rules
+package.json
+src/config/app-config.js
+src/core/i18n/locales/ar.js
+src/core/i18n/locales/en.js
+src/modules/cleaning/cleaning-integration.js
+src/modules/cleaning/cleaning-model.js
+src/modules/cleaning/cleaning-repository.js
+src/modules/cleaning/cleaning-store.js
+src/modules/cleaning/page.js
+tests/e2e/fake-sdk/firebase-firestore.js
+tests/e2e/run-e2e.mjs
+tests/rules/rules.test.mjs
+
+REMOVED
+(none)

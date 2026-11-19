@@ -1,0 +1,51 @@
+Phase 5.3 — changed files relative to HomeHub-V5-Phase5.2.1-Rules-Evaluation-Repair.zip
+(this list file and the four PHASE-5.3 documents are also added)
+
+ADDED
+assets/css/modules/cleaning.css
+src/modules/cleaning/cleaning-model.js
+src/modules/cleaning/cleaning-repository.js
+src/modules/cleaning/cleaning-service.js
+src/modules/cleaning/cleaning-store.js
+src/modules/cleaning/page.js
+src/modules/cleaning/widget.js
+src/modules/expenses/budget-edit.js
+tests/unit/budget-edit.test.mjs
+tests/unit/cleaning.test.mjs
+
+MODIFIED
+firestore.rules
+index.html
+package.json
+src/config/app-config.js
+src/core/i18n/locales/ar.js
+src/core/i18n/locales/en.js
+src/modules/cleaning/module.js
+src/modules/expenses/collections.js
+src/modules/expenses/finance-store.js
+src/modules/expenses/tab-budget.js
+src/ui/shell/app-shell.js
+tests/e2e/fake-sdk/firebase-firestore.js
+tests/e2e/run-e2e.mjs
+tests/rules/rules.test.mjs
+tests/static/devices-static.test.mjs
+tests/static/finance-static.test.mjs
+tests/static/rooms-static.test.mjs
+tests/static/static.test.mjs
+tests/unit/finance-store.test.mjs
+tests/unit/registry.test.mjs
+
+REMOVED
+(none)
+
+PLUS (documents, added after the list was generated)
+PHASE-5.3-REPORT.md
+PHASE-5.3-SECURITY-IMPACT.md
+PHASE-5.3-USER-GUIDE.md
+PHASE-5.3-CHANGED-FILES.txt
+
+MODIFIED (documents)
+CHANGELOG.md
+TESTING.md
+FIRESTORE-SCHEMA.md
+PROJECT-STATE.md

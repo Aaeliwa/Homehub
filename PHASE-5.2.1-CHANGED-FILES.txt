@@ -1,0 +1,19 @@
+Phase 5.2.1 — changed files vs HomeHub-V5-Phase5.2-Life-Savings-Zakat.zip
+
+ADDED
+PHASE-5.2.1-SECURITY-IMPACT.md
+tools/rules-cost.mjs
+tools/run-strict.mjs
+
+MODIFIED
+CHANGELOG.md
+SECURITY.md
+TESTING.md
+firestore.rules
+package.json
+src/config/app-config.js
+tests/static/finance-static.test.mjs
+tests/static/static.test.mjs
+
+REMOVED
+(none)

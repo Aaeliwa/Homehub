@@ -1,0 +1,2460 @@
+rules_version = '2';
+
+// =====================================================================================
+// HomeHub V5 — Firestore Security Rules (Phase 1: Foundation + Phase 2: Rooms + Phase 3: Devices + Phase 4: Finance + Phase 4A: Family + Phase 5: Life Savings & Zakat + Phase 5.1: legacy Home adoption + Phase 5.2: Zakat sharing & payment linkage + Phase 5.3: budget edits & cleaning)
+//
+//   Firebase Auth  +  ACTIVE Home membership  +  Role permissions  =  Authorization
+//
+// * Identity comes only from request.auth.uid. Nothing a client writes can stand in for it.
+// * homes/{h}/members/{uid} is the authorization source. users/{uid}.defaultHomeId is a
+//   convenience pointer and grants nothing.
+// * A role's `permissions` list holds grants: "*", "<namespace>.*" or "<namespace>.<action>".
+//   grants() below mirrors src/core/permissions/resolver.js exactly.
+// * BOOTSTRAP: a signed-in user may create a brand-new Home only in one batch that also
+//   creates their own owner membership. See isBootstrap() and SECURITY.md.
+// * Everything not explicitly allowed is denied (including all future module collections
+//   until their phase adds rules).
+// =====================================================================================
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ---------------------------------------------------------------- identity
+    function signedIn() { return request.auth != null; }
+    function isSelf(uid) { return signedIn() && request.auth.uid == uid; }
+
+    // ---------------------------------------------------------------- paths
+    function homeDoc(h) { return /databases/$(database)/documents/homes/$(h); }
+    function memberDoc(h, u) { return /databases/$(database)/documents/homes/$(h)/members/$(u); }
+    function roleDoc(h, r) { return /databases/$(database)/documents/homes/$(h)/roles/$(r); }
+    function myMemberDoc(h) { return memberDoc(h, request.auth.uid); }
+
+    // ---------------------------------------------------------------- membership & roles
+    function myMember(h) { return get(myMemberDoc(h)).data; }
+
+    function isActiveMember(h) {
+      return signedIn() && exists(myMemberDoc(h)) && myMember(h).status == 'active';
+    }
+
+    function myRole(h) { return get(roleDoc(h, myMember(h).roleId)).data; }
+
+    function grants(perms, ns, action) {
+      // Phase 5.2.1: one set operation instead of three list scans (same semantics).
+      return perms is list && perms.hasAny(['*', ns + '.*', ns + '.' + action]);
+    }
+
+    // The single permission check. Requires an active membership AND an existing role.
+    function can(h, ns, action) {
+      // Phase 5.1.1: the membership and the role are each evaluated ONCE (bound as parameters)
+      // instead of re-reading them per check — same semantics, far fewer evaluated expressions.
+      return signedIn() && exists(myMemberDoc(h)) && canWith(h, myMember(h), ns, action);
+    }
+    function canWith(h, m, ns, action) {
+      return m.status == 'active' && roleGrants(roleDoc(h, m.roleId), ns, action);
+    }
+    // Phase 5.2.1: the role path is built once and passed (it was built twice per can()).
+    function roleGrants(p, ns, action) { return exists(p) && grants(get(p).data.permissions, ns, action); }
+
+    function isOwner(h) { return isActiveMember(h) && myMember(h).roleId == 'owner'; }
+    // V6 batch 3 (locked policy): household budgets are managed ONLY by owners and admins — enforced by
+    // role id, so a stored role document that still grants manageBudgets to members gives them nothing.
+    // Same member document as can() (cached read: no extra access call).
+    // Household wallet cycles: owner / admin only; personal wallet cycles stay with their owner (unchanged).
+    function budgetWalletOk(h, W) { return mayUseWallet(h, W, 'manageBudgets') && (W.visibility != 'household' || myMember(h).roleId in ['owner', 'admin']); }
+    function budgetAdmin(h) { return can(h, 'expenses', 'manageBudgets') && myMember(h).roleId in ['owner', 'admin']; }
+    function myRank(h) { return myRole(h).rank; }
+    function rankOf(h, r) { return get(roleDoc(h, r)).data.rank; }
+
+    // ---------------------------------------------------------------- bootstrap
+    // True only while a NEW home (it did not exist before this request) is being created
+    // in the same batch, by the signed-in user, together with that user's ACTIVE OWNER
+    // membership. getAfter/existsAfter see the state as if the whole batch committed.
+    // Because the home must not exist beforehand, this can never be used to join or take
+    // over an existing home.
+    function isBootstrap(h) {
+      return signedIn()
+        && !exists(homeDoc(h))
+        && existsAfter(homeDoc(h))
+        && getAfter(homeDoc(h)).data.createdBy == request.auth.uid
+        && existsAfter(myMemberDoc(h))
+        && getAfter(myMemberDoc(h)).data.roleId == 'owner'
+        && getAfter(myMemberDoc(h)).data.status == 'active';
+    }
+
+    // ---------------------------------------------------------------- validation helpers
+    function incoming() { return request.resource.data; }
+    function changed() { return request.resource.data.diff(resource.data).affectedKeys(); }
+    function exactKeys(keys) { return incoming().keys().hasAll(keys) && incoming().keys().hasOnly(keys); }
+    function isName(v, max) { return v is string && v.trim().size() > 0 && v.size() <= max; }
+    function isLanguage(v) { return v in ['ar', 'en']; }
+    function isTheme(v) { return v in ['system', 'light', 'dark']; }
+    function isCurrency(v) { return v is string && v.matches('^[A-Z]{3}$'); }
+    function isTimezone(v) { return v is string && v.size() > 0 && v.size() <= 64; }
+    function isWeekday(v) { return v is int && v >= 0 && v <= 6; }
+    function stampedNow(field) { return incoming()[field] == request.time; }
+    function isEmail(v) { return v is string && v.size() <= 254 && v == request.auth.token.email; }
+    function systemRoleIds() { return ['owner', 'admin', 'member', 'viewer', 'child']; }
+
+    // defaultHomeId must be null or a home where the caller is (after this write) an
+    // active member. It is still only a pointer: reads re-check membership every time.
+    function isValidDefaultHome(h) {
+      return h == null
+        || (h is string
+            && existsAfter(memberDoc(h, request.auth.uid))
+            && getAfter(memberDoc(h, request.auth.uid)).data.status == 'active');
+    }
+
+    // ---------------------------------------------------------------- rooms (Phase 2)
+    function roomTypes() {
+      return ['living_room', 'bedroom', 'master_bedroom', 'kids_room', 'kitchen', 'bathroom',
+              'dining_room', 'office', 'balcony', 'laundry', 'storage', 'garage', 'garden',
+              'hallway', 'entrance', 'other'];
+    }
+    function isOptionalText(v, max) {
+      return v == null || (v is string && v.trim().size() > 0 && v.size() <= max);
+    }
+    // Editable content of a room document (create + edit). Mirrors room-model.js.
+    function validRoomContent(d) {
+      return isName(d.name, 60)
+        && d.type in roomTypes()
+        && d.icon is string && d.icon.matches('^[a-z][a-z0-9_]{0,31}$')
+        && isOptionalText(d.floor, 40)
+        && isOptionalText(d.notes, 500)
+        && d.sortOrder is int && d.sortOrder >= 0 && d.sortOrder <= 1000000000;
+    }
+    function stampedBy() {
+      return incoming().updatedBy == request.auth.uid && stampedNow('updatedAt');
+    }
+
+    // ---------------------------------------------------------------- devices (Phase 3)
+    // category -> allowed subtypes. Generated from src/modules/devices/device-model.js;
+    // tests/static/devices-static.test.mjs fails if the two ever differ.
+    function deviceSubtypes() {
+      return {
+        'air_conditioning': ['split_ac', 'window_ac', 'portable_ac', 'central_ac', 'other'],
+        'refrigeration': ['refrigerator', 'freezer', 'water_dispenser', 'other'],
+        'laundry': ['washing_machine', 'dryer', 'washer_dryer', 'iron', 'other'],
+        'kitchen_appliance': ['oven', 'cooker', 'microwave', 'dishwasher', 'coffee_machine', 'blender', 'kettle', 'air_fryer', 'other'],
+        'water_system': ['water_heater', 'water_filter', 'water_pump', 'water_tank', 'other'],
+        'audio_video': ['television', 'receiver', 'speaker', 'projector', 'other'],
+        'computing': ['desktop_computer', 'laptop', 'tablet', 'printer', 'other'],
+        'networking': ['router', 'modem', 'access_point', 'network_switch', 'other'],
+        'cleaning_equipment': ['vacuum_cleaner', 'robot_vacuum', 'steam_cleaner', 'other'],
+        'lighting': ['ceiling_light', 'lamp', 'outdoor_light', 'other'],
+        'electrical': ['electrical_panel', 'ups', 'voltage_stabilizer', 'other'],
+        'power': ['generator', 'solar_panel', 'inverter', 'battery_bank', 'other'],
+        'heating': ['space_heater', 'other'],
+        'ventilation': ['ceiling_fan', 'stand_fan', 'exhaust_fan', 'air_purifier', 'other'],
+        'plumbing': ['faucet', 'toilet', 'shower_unit', 'other'],
+        'security': ['camera', 'alarm', 'smart_lock', 'intercom', 'other'],
+        'furniture': ['sofa', 'bed', 'wardrobe', 'table', 'other'],
+        'outdoor': ['garden_equipment', 'pool_equipment', 'grill', 'other'],
+        'other': []
+      };
+    }
+    function deviceStatuses() { return ['operational', 'needs_attention', 'out_of_service', 'stored']; }
+    // Calendar date 'YYYY-MM-DD' (date-only; stored as a string so it never shifts by time zone).
+    function isOptionalDate(v) {
+      return v == null || (v is string && v.matches('^(19|20)[0-9][0-9]-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$|^2100-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$'));
+    }
+    function isOptionalRoomId(v) {
+      return v == null || (v is string && v.matches('^[A-Za-z0-9_-]{1,128}$'));
+    }
+    // Editable content of a device (create + edit). Mirrors device-model.js.
+    function validDeviceContent(d) {
+      return isName(d.name, 80)
+        && d.category in deviceSubtypes()
+        && (d.subtype == null || (d.subtype is string && d.subtype in deviceSubtypes()[d.category]))
+        && d.status in deviceStatuses()
+        && d.icon is string && d.icon.matches('^[a-z][a-z0-9_]{0,31}$')
+        && isOptionalRoomId(d.roomId)
+        && isOptionalText(d.brand, 60)
+        && isOptionalText(d.model, 60)
+        && isOptionalText(d.serialNumber, 80)
+        && isOptionalText(d.notes, 1000)
+        && isOptionalDate(d.purchaseDate)
+        && isOptionalDate(d.installationDate)
+        && isOptionalDate(d.warrantyExpiry)
+        && (d.purchasePrice == null
+              ? d.currency == null
+              : ((d.purchasePrice is int || d.purchasePrice is float)
+                 && d.purchasePrice >= 0 && d.purchasePrice <= 1000000000000
+                 && isCurrency(d.currency)));
+    }
+    // A room in THIS home that exists and is active. The path is built from {h}, so a
+    // room id from another home can never match.
+    function isActiveRoom(h, roomId) {
+      return exists(/databases/$(database)/documents/homes/$(h)/rooms/$(roomId))
+        && get(/databases/$(database)/documents/homes/$(h)/rooms/$(roomId)).data.active == true;
+    }
+
+    // ---------------------------------------------------------------- finance (Phase 4)
+    // Lists generated from src/modules/expenses/finance-model.js (static test keeps them in sync).
+    function financeCategories() { return ['groceries', 'food', 'transport', 'fuel', 'home', 'utilities', 'children', 'education', 'health', 'shopping', 'entertainment', 'subscriptions', 'rent', 'mortgage', 'insurance', 'maintenance', 'gifts', 'zakat', 'other']; }
+    function paymentMethods() { return ['cash', 'debit_card', 'credit_card', 'bank_transfer', 'digital_wallet', 'other', 'visa']; }
+    function walletTypes() { return ['cash', 'bank', 'card', 'digital', 'allowance', 'other']; }
+    function isOptionalId(v) { return v == null || (v is string && v.matches('^[A-Za-z0-9_-]{1,128}$')); }
+    function isMoney(v) { return v is int && v >= 0 && v <= 100000000000000; }
+    function walletPath(h, w) { return /databases/$(database)/documents/homes/$(h)/wallets/$(w); }
+    function walletAfter(h, w) { return getAfter(walletPath(h, w)).data; }
+    function rd(W) { return W.visibility == 'household' ? [] : W.readers; }
+
+    // PRIVACY: a finance record is readable by household-finance viewers when its audience is
+    // 'household', and by the listed readers (owner + shared members of a personal wallet).
+    // Home owner/admin get NO implicit access to another adult's private wallet.
+    function canReadFinance(h, d) {
+      // Phase 5.1.2: optional fields are read with .get(): a QUERY is evaluated against its
+      // constraints only, and reading a field the query does not constrain ("audience" in the
+      // `readers array-contains <me>` query) is an evaluation error that denies the whole query.
+      return isActiveMember(h)
+        && ((d.get('audience', '') == 'household' && can(h, 'expenses', 'view'))
+            || request.auth.uid in d.readers);   // no `is list`: a query cannot prove it (5.1.3)
+    }
+    // May the caller use wallet W for `action`? Household wallets: role permission. Personal
+    // wallets: the caller must be one of its readers AND hold expenses.personal.
+    function mayUseWallet(h, W, action) {
+      return W.active == true
+        && (W.visibility == 'household'
+              ? can(h, 'expenses', action)
+              : (request.auth.uid in W.readers && can(h, 'expenses', 'personal')));
+    }
+    // Access labels must be exactly what the referenced wallet(s) imply (no client choice).
+    function access0(d) { return d.audience == 'household' && d.readers == []; }
+    function access1(h, d, w) { return accessW(d, walletAfter(h, w)); }
+    // Access labels for ONE already-evaluated wallet W (bound once by the caller).
+    function accessW(d, W) {
+      return W.visibility == 'household'
+        ? (d.audience == 'household' && d.readers == [])
+        : (d.audience == 'restricted' && d.readers.toSet() == W.readers.toSet());
+    }
+    function access2(h, d, a, b) {
+      let A = walletAfter(h, a);
+      let B = walletAfter(h, b);
+      return d.audience == ((A.visibility == 'household' || B.visibility == 'household') ? 'household' : 'restricted')
+        && d.readers.toSet() == rd(A).concat(rd(B)).toSet();
+    }
+    function walletExists(h, w) { return w is string && existsAfter(walletPath(h, w)); }
+    function audienceShape(d) { return d.audience in ['household', 'restricted'] && d.readers is list && d.readers.size() <= 12; }
+    // Members listed in a wallet's sharedWith must be members of THIS home (max 5).
+    function membersOf(h, list) {
+      return list is list && list.size() <= 5
+        && (list.size() < 1 || exists(memberDoc(h, list[0])))
+        && (list.size() < 2 || exists(memberDoc(h, list[1])))
+        && (list.size() < 3 || exists(memberDoc(h, list[2])))
+        && (list.size() < 4 || exists(memberDoc(h, list[3])))
+        && (list.size() < 5 || exists(memberDoc(h, list[4])));
+    }
+    function expenseContentOk(d) {
+      return isMoney(d.amountMinor) && isCurrency(d.currency)
+        && d.date is string && isOptionalDate(d.date)
+        && d.category in financeCategories()
+        && isOptionalText(d.note, 200) && isOptionalText(d.merchant, 60)
+        && (d.paymentMethod == null || d.paymentMethod in paymentMethods())
+        && isOptionalId(d.walletId) && isOptionalId(d.budgetCycleId) && isOptionalId(d.paidBy)
+        && isOptionalId(d.commitmentId) && isOptionalDate(d.commitmentDueDate)
+        && audienceShape(d);
+    }
+    // An expense may use a wallet (or none = household) for `action`, with matching access labels.
+    function expenseWalletOk(h, d, action) {
+      return d.walletId == null
+        ? (can(h, 'expenses', action) && access0(d))
+        : (walletExists(h, d.walletId) && expenseWalletOkW(h, d, walletAfter(h, d.walletId), action));
+    }
+    // W = the referenced wallet, evaluated once.
+    function expenseWalletOkW(h, d, W, action) {
+      return mayUseWallet(h, W, action) && accessW(d, W) && W.currency == d.currency;
+    }
+    function cycleLinkOk(h, d) {
+      return d.budgetCycleId == null
+        || (existsAfter(/databases/$(database)/documents/homes/$(h)/spendingCycles/$(d.budgetCycleId))
+            && getAfter(/databases/$(database)/documents/homes/$(h)/spendingCycles/$(d.budgetCycleId)).data.walletId == d.walletId);
+    }
+    function commitmentPath(h, c) { return /databases/$(database)/documents/homes/$(h)/commitments/$(c); }
+    function expensePath(h, e) { return /databases/$(database)/documents/homes/$(h)/expenses/$(e); }
+    function payExpenseId(c, due) { return 'cm_' + c + '_' + due.replace('-', ''); }
+
+    function archiveFieldsOk() {
+      return !('active' in changed()) && !('archivedAt' in changed()) && !('archivedBy' in changed())
+        || (resource.data.active == true && incoming().active == false && incoming().archivedAt == request.time
+            && incoming().archivedBy == request.auth.uid)
+        || (resource.data.active == false && incoming().active == true && incoming().archivedAt == null
+            && incoming().archivedBy == null);
+    }
+    function commitmentContentOk(d) {
+      return isName(d.name, 60) && isMoney(d.amountMinor) && d.amountMinor > 0 && isCurrency(d.currency)
+        && d.category in financeCategories()
+        && d.recurrence is map && d.recurrence.keys().hasOnly(['unit', 'interval']) && d.recurrence.keys().hasAll(['unit', 'interval'])
+        && d.recurrence.unit in ['day', 'week', 'month', 'year']
+        && d.recurrence.interval is int && d.recurrence.interval >= 1 && d.recurrence.interval <= 36
+        && d.anchorDay is int && d.anchorDay >= 1 && d.anchorDay <= 31
+        && d.nextDueDate is string && isOptionalDate(d.nextDueDate)
+        && (d.paymentMethod == null || d.paymentMethod in paymentMethods())
+        && isOptionalId(d.walletId) && isOptionalText(d.notes, 1000) && isOptionalDate(d.lastPaidDate)
+        && audienceShape(d) && d.active is bool;
+    }
+
+    // ---------------------------------------------------------------- family (Phase 4A)
+    function invitePath(code) { return /databases/$(database)/documents/invites/$(code); }
+    function inv(code) { return get(invitePath(code)).data; }
+    // A membership written FROM an invitation: the invite was pending, unexpired, for THIS
+    // home, and becomes accepted by the caller in the same batch. Role, relationship,
+    // guardians and addedBy are copied from the invite — the invitee chooses none of them.
+    function joinsByInvite(h, u, d) {
+      return isSelf(u)
+        && d.inviteCode is string && d.inviteCode.matches('^[A-Z2-9]{24}$')
+        && exists(invitePath(d.inviteCode))
+        && joinsByInviteI(h, u, d, inv(d.inviteCode));
+    }
+    // I = the invitation (pre-batch), bound once.
+    function joinsByInviteI(h, u, d, I) {
+      return true
+        && I.status == 'pending'
+        && I.homeId == h
+        && request.time.toMillis() < I.expiresAtMillis
+        && getAfter(invitePath(d.inviteCode)).data.status == 'accepted'
+        && getAfter(invitePath(d.inviteCode)).data.acceptedBy == request.auth.uid
+        && d.roleId == I.roleId
+        && d.relationship == I.relationship
+        && d.guardianUids == I.guardianUids
+        && d.status == 'active'
+        && isName(d.displayName, 60)
+        && stampedNow('joinedAt') && stampedNow('updatedAt');
+    }
+    // Guardians: 1–5 ACTIVE adults of this home (never the child).
+    function guardiansOk(h, list, childUid) {
+      return list is list && list.size() >= 1 && list.size() <= 5 && !(childUid in list)
+        && (list.size() < 1 || (exists(memberDoc(h, list[0])) && get(memberDoc(h, list[0])).data.status == 'active'))
+        && (list.size() < 2 || (exists(memberDoc(h, list[1])) && get(memberDoc(h, list[1])).data.status == 'active'))
+        && (list.size() < 3 || (exists(memberDoc(h, list[2])) && get(memberDoc(h, list[2])).data.status == 'active'))
+        && (list.size() < 4 || (exists(memberDoc(h, list[3])) && get(memberDoc(h, list[3])).data.status == 'active'))
+        && (list.size() < 5 || (exists(memberDoc(h, list[4])) && get(memberDoc(h, list[4])).data.status == 'active'));
+    }
+    function canAssignRole(h, r) {
+      return r != 'owner' && exists(roleDoc(h, r)) && (isOwner(h) || rankOf(h, r) < myRank(h));
+    }
+
+    // ================================================================= invites/{code}  (Phase 4A)
+    // Top-level because the invitee is not a member yet. The code is the secret (24 symbols,
+    // ~117 bits): GET needs the exact code; LIST is only for that home's inviters. Single-use,
+    // expiring, accepted only together with the caller's own membership (see joinsByInvite).
+    match /invites/{code} {
+      allow get: if signedIn() && code.matches('^[A-Z2-9]{24}$');
+      allow list: if signedIn() && can(resource.data.homeId, 'members', 'invite');
+
+      allow create: if signedIn() && code.matches('^[A-Z2-9]{24}$')
+        && exactKeys(['homeId', 'homeName', 'roleId', 'relationship', 'guardianUids', 'status', 'createdBy',
+                      'createdAt', 'expiresAtMillis', 'acceptedBy', 'acceptedAt', 'cancelledBy', 'cancelledAt',
+                      'schemaVersion'])
+        && incoming().homeId is string
+        && can(incoming().homeId, 'members', 'invite')
+        && incoming().homeName == get(homeDoc(incoming().homeId)).data.name
+        && canAssignRole(incoming().homeId, incoming().roleId)
+        && incoming().roleId in ['admin', 'member', 'viewer', 'child']
+        && (incoming().relationship == 'child'
+              ? (incoming().roleId == 'child' && guardiansOk(incoming().homeId, incoming().guardianUids, ''))
+              : (incoming().relationship == 'adult' && incoming().roleId != 'child' && incoming().guardianUids == []))
+        && incoming().status == 'pending'
+        && incoming().createdBy == request.auth.uid && stampedNow('createdAt')
+        && incoming().expiresAtMillis is int
+        && incoming().expiresAtMillis > request.time.toMillis()
+        && incoming().expiresAtMillis <= request.time.toMillis() + 1209600000
+        && incoming().acceptedBy == null && incoming().acceptedAt == null
+        && incoming().cancelledBy == null && incoming().cancelledAt == null
+        && incoming().schemaVersion == 1;
+
+      allow update: if signedIn() && resource.data.status == 'pending'
+        && (
+          // Accept: by the caller, once, before expiry, together with their membership.
+          (changed().hasOnly(['status', 'acceptedBy', 'acceptedAt'])
+            && incoming().status == 'accepted'
+            && incoming().acceptedBy == request.auth.uid
+            && incoming().acceptedAt == request.time
+            && request.time.toMillis() < resource.data.expiresAtMillis
+            && existsAfter(memberDoc(resource.data.homeId, request.auth.uid))
+            && getAfter(memberDoc(resource.data.homeId, request.auth.uid)).data.inviteCode == code
+            && getAfter(memberDoc(resource.data.homeId, request.auth.uid)).data.status == 'active'
+            && (!exists(memberDoc(resource.data.homeId, request.auth.uid))
+                || get(memberDoc(resource.data.homeId, request.auth.uid)).data.status in ['removed', 'left']))
+          ||
+          // Cancel: an inviter of that home.
+          (changed().hasOnly(['status', 'cancelledBy', 'cancelledAt'])
+            && can(resource.data.homeId, 'members', 'invite')
+            && incoming().status == 'cancelled'
+            && incoming().cancelledBy == request.auth.uid
+            && incoming().cancelledAt == request.time)
+        );
+      allow delete: if false;
+    }
+
+    // ---------------------------------------------------------------- life savings (Phase 5)
+    function assetPath(h, a) { return /databases/$(database)/documents/homes/$(h)/savingsAssets/$(a); }
+    function assetAfter(h, a) { return getAfter(assetPath(h, a)).data; }
+    function eventPath(h, e) { return /databases/$(database)/documents/homes/$(h)/savingsEvents/$(e); }
+    function savingsTypes() { return ['cash', 'bank', 'gold', 'silver', 'fx', 'investment', 'other']; }
+    function purities(t) { return t == 'gold' ? ['24', '22', '21', '18'] : ['999', '925', '900', '800']; }
+    // Same privacy semantics as Finance: household audience needs savings.view; otherwise the
+    // caller must be one of the asset's readers (owner + explicitly shared members).
+    function canReadSavings(h, d) {
+      // Query-safe like canReadFinance (Phase 5.1.2).
+      return isActiveMember(h)
+        && ((d.get('audience', '') == 'household' && can(h, 'savings', 'view'))
+            || request.auth.uid in d.readers);   // no `is list`: a query cannot prove it (5.1.3)
+    }
+    function isGuardianOf(h, childUid) {
+      return exists(memberDoc(h, childUid))
+        && request.auth.uid in get(memberDoc(h, childUid)).data.get('guardianUids', []);
+    }
+    function isChildMember(h, u) {
+      return get(memberDoc(h, u)).data.roleId == 'child' || get(memberDoc(h, u)).data.get('relationship', 'adult') == 'child';
+    }
+    // May the caller move quantity in/out of asset A? Household: role permission. Personal: reader + savings.personal.
+    function mayUseAsset(h, A, action) {
+      return A.active == true
+        && (A.visibility == 'household'
+              ? can(h, 'savings', action)
+              : (request.auth.uid in A.readers && can(h, 'savings', 'personal')));
+    }
+    function allocSum(l) {
+      return 0 + (l.size() > 0 ? l[0].bps : 0) + (l.size() > 1 ? l[1].bps : 0) + (l.size() > 2 ? l[2].bps : 0)
+           + (l.size() > 3 ? l[3].bps : 0) + (l.size() > 4 ? l[4].bps : 0) + (l.size() > 5 ? l[5].bps : 0);
+    }
+    // Explicit Zakat allocation of a household asset: [] or entries summing to exactly 10,000 bps.
+    function allocationsOk(l) { return l is list && l.size() <= 6 && (l.size() == 0 || allocSum(l) == 10000); }
+    function assetContentOk(d) {
+      return isName(d.name, 60) && d.type in savingsTypes()
+        && (d.type in ['gold', 'silver']
+              ? (d.currency == null && d.purity in purities(d.type))
+              : (isCurrency(d.currency) && d.purity == null))
+        && isOptionalText(d.institution, 60) && isOptionalText(d.notes, 1000)
+        && d.zakatTreatment in ['included', 'excluded'] && allocationsOk(d.allocations);
+    }
+    // A wallet↔savings movement must have its savings leg in the same batch (same transferId,
+    // same wallet), so neither half can exist alone.
+    function savingsLegOk(h, legId, tid, walletId, d) {
+      return existsAfter(eventPath(h, legId)) && savingsLegE(getAfter(eventPath(h, legId)).data, tid, walletId, d);
+    }
+    // V6 S2: money assets compare qty (minor units) with amountMinor + currency; metal (mg) compares the
+    // cost paid; mg is NEVER compared with money; metal transfer_out is refused (sell first).
+    function savingsLegE(E, tid, walletId, d) {
+      return E.transferId == tid && E.walletId == walletId
+        && (E.unit == 'minor'
+              ? (E.currency == d.currency && E.qty == (E.type == 'transfer_in' ? d.amountMinor : -d.amountMinor))
+              : (E.unit == 'mg' && E.type == 'transfer_in' && E.costMinor == d.amountMinor && E.costCurrency == d.currency));
+    }
+
+    // ---------------------------------------------------------------- legacy Home adoption (Phase 5.1)
+    // A pre-membership Home (created by an older HomeHub version): it exists, its STORED
+    // createdBy is the caller, and it has NO roles/owner. Under these rules every Home with any
+    // member also has roles/owner (bootstrap writes both atomically; invitations need roles),
+    // so "no owner role" proves it was never initialised and no Owner can be displaced.
+    function adoptionTemplateVersion() { return 8; }   // == ROLE_TEMPLATE_VERSION (static test keeps them equal)
+    function isUnadoptedCreator(h) {
+      return signedIn() && exists(homeDoc(h))
+        && get(homeDoc(h)).data.get('createdBy', '') == request.auth.uid
+        && !exists(myMemberDoc(h));
+    }
+    // The ONE-TIME adoption batch: the caller's own active Owner membership + the missing system
+    // roles, nothing else. Everything is proven from STORED state (get), never from client input.
+    // Phase 5.1.3: a ROLE written in the same batch as the caller's adoption membership. The
+    // membership's create rule proves the FULL isLegacyAdoption() once; a batch is atomic, so a
+    // role can never be created without that proof succeeding. This avoids re-running the full
+    // proof (home map equality, profile, owner-role checks) for each of the five roles.
+    function isLegacyAdoptionCompanion(h) {
+      return isUnadoptedCreator(h)
+        && !exists(roleDoc(h, 'owner'))
+        && existsAfter(myMemberDoc(h))
+        && getAfter(myMemberDoc(h)).data.get('legacyAdoption', false) == true
+        && getAfter(myMemberDoc(h)).data.roleId == 'owner';
+    }
+    function isLegacyAdoption(h) {
+      return isUnadoptedCreator(h)
+        && !exists(roleDoc(h, 'owner'))
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('defaultHomeId', '') == h
+        && getAfter(homeDoc(h)).data == get(homeDoc(h)).data
+        && existsAfter(myMemberDoc(h))
+        && getAfter(myMemberDoc(h)).data.roleId == 'owner'
+        && getAfter(myMemberDoc(h)).data.status == 'active'
+        && getAfter(myMemberDoc(h)).data.get('legacyAdoption', false) == true
+        && existsAfter(roleDoc(h, 'owner'))
+        && getAfter(roleDoc(h, 'owner')).data.permissions == ['*']
+        && getAfter(roleDoc(h, 'owner')).data.rank == 100;
+    }
+
+    // Savings event create, with A = the (post-batch) asset bound once by the caller.
+    function savingsEventCreateOk(h, eventId, d, A) {
+      return exactKeys(['assetId', 'type', 'qty', 'unit', 'currency', 'date', 'note', 'transferId', 'walletId',
+                                    'costMinor', 'costCurrency', 'audience', 'readers', 'status', 'createdBy', 'createdAt',
+                                    'schemaVersion'])
+          && d.assetId is string && existsAfter(assetPath(h, d.assetId))  // asset may be created in the same batch
+          && d.type in ['opening', 'contribution', 'withdrawal', 'adjustment', 'transfer_in', 'transfer_out']
+          && d.qty is int && d.qty != 0
+          && (d.type in ['opening', 'contribution', 'transfer_in'] ? d.qty > 0
+              : (d.type in ['withdrawal', 'transfer_out'] ? d.qty < 0 : true))
+          && (A.type in ['gold', 'silver']) == (d.unit == 'mg')
+          && d.unit in ['mg', 'minor']
+          && d.currency == A.currency
+          && d.date is string && isOptionalDate(d.date)
+          && isOptionalText(d.note, 200)
+          && (d.costMinor == null || (isMoney(d.costMinor) && isCurrency(d.costCurrency)))
+          && d.status == 'active'
+          // Access labels copied from the asset exactly.
+          && d.audience == A.audience
+          && d.readers.toSet() == A.readers.toSet()
+          && mayUseAsset(h, A,
+               d.type in ['transfer_in', 'transfer_out'] ? 'transfer' : 'manageHousehold')
+          && d.createdBy == request.auth.uid && stampedNow('createdAt') && d.schemaVersion == 1
+          && (d.transferId == null
+                ? (d.walletId == null && d.type in ['opening', 'contribution', 'withdrawal', 'adjustment'])
+                : (d.type in ['transfer_in', 'transfer_out']
+                   && eventId == d.transferId + (d.type == 'transfer_in' ? '_in' : '_out')
+                   && (d.walletId == null
+                         // asset ↔ asset: the other leg exists in the same batch
+                         ? (existsAfter(eventPath(h, d.transferId + (d.type == 'transfer_in' ? '_out' : '_in')))
+                            && getAfter(eventPath(h, d.transferId + (d.type == 'transfer_in' ? '_out' : '_in'))).data.transferId == d.transferId)
+                         // wallet ↔ asset: the Finance movement exists in the same batch
+                         : (existsAfter(/databases/$(database)/documents/homes/$(h)/walletMovements/$('sv_' + d.transferId))
+                            && getAfter(/databases/$(database)/documents/homes/$(h)/walletMovements/$('sv_' + d.transferId)).data.savingsTransferId == d.transferId))));
+    }
+
+    // ---------------------------------------------------------------- zakat records (Phase 5.2.1)
+    function zakatPath(h, id) { return /databases/$(database)/documents/homes/$(h)/zakatRecords/$(id); }
+    function zakatProfileOk(recordId, d) {
+      return exactKeys(['kind', 'ownerUid', 'version', 'settings', 'readers', 'createdBy', 'createdAt', 'schemaVersion'])
+        && recordId.matches(d.ownerUid + '_p[0-9]{1,6}')
+        && d.version is int && d.version >= 1
+        && d.settings is map
+        && d.settings.nisabBasis in ['gold', 'silver', 'manual']
+        && d.settings.rateBps is int && d.settings.rateBps > 0 && d.settings.rateBps <= 10000
+        && d.settings.hawlCalendar in ['hijri', 'gregorian']
+        && d.settings.belowNisabPolicy in ['reset', 'continue'];
+    }
+    function zakatSnapshotOk(d) {
+      return exactKeys(['kind', 'ownerUid', 'date', 'hawlStart', 'hawlEnd', 'zakatableMinor', 'nisabMinor', 'nisabBasis', 'rateBps',
+                        'estimateMinor', 'currency', 'lines', 'profileVersion', 'readers', 'createdBy', 'createdAt', 'schemaVersion'])
+        && isMoney(d.zakatableMinor) && isMoney(d.estimateMinor) && isCurrency(d.currency)
+        && d.lines is list && d.lines.size() <= 200;
+    }
+    function zakatPaymentOk(h, recordId, d) {
+      return exactKeys(['kind', 'ownerUid', 'date', 'amountMinor', 'currency', 'snapshotId', 'note', 'linkedExpenseId',
+                        'readers', 'createdBy', 'createdAt', 'schemaVersion'])
+        && isMoney(d.amountMinor) && d.amountMinor > 0 && isCurrency(d.currency)
+        && isOptionalDate(d.date) && d.date is string && isOptionalText(d.note, 200)
+        // a payment may reference only a calculation (snapshot) of the SAME owner (existing or same batch)
+        && (d.snapshotId == null
+            || (d.snapshotId is string && existsAfter(zakatPath(h, d.snapshotId))
+                && zakatSnapshotOfOwner(getAfter(zakatPath(h, d.snapshotId)).data, d.ownerUid)))
+        // optional Finance link: exactly ONE expense, deterministic id, written in the same batch
+        && (d.linkedExpenseId == null
+            || (d.linkedExpenseId == 'zk_' + recordId && existsAfter(expensePath(h, d.linkedExpenseId))
+                && zakatExpenseMatches(getAfter(expensePath(h, d.linkedExpenseId)).data, d.amountMinor)));
+    }
+    function zakatSnapshotOfOwner(S, ownerUid) { return S.kind == 'snapshot' && S.ownerUid == ownerUid; }
+    function zakatExpenseMatches(E, amount) { return E.category == 'zakat' && E.amountMinor == amount; }
+
+    // ---------------------------------------------------------------- wallet movements (Phase 5.2.1)
+    // Each wallet is evaluated once (W / A / B) and passed in; branch logic is unchanged.
+    // exactly one of a, b is set (same as (a == null) != (b == null))
+    function oneOf(a, b) { return a == null ? b != null : b == null; }
+    function mvUseW(h, d, W) { return mayUseWallet(h, W, 'transfer') && W.currency == d.currency && accessW(d, W); }
+    function mvUseNoCurW(h, d, W) { return mayUseWallet(h, W, 'transfer') && accessW(d, W); }   // adjustment: no currency check (as before)
+    function access2W(d, A, B) {
+      return d.audience == ((A.visibility == 'household' || B.visibility == 'household') ? 'household' : 'restricted')
+        && d.readers.toSet() == rd(A).concat(rd(B)).toSet();
+    }
+    function mvFundingOk(h, d) {
+      return d.fromWalletId == null && walletExists(h, d.toWalletId) && mvFundW(h, d, walletAfter(h, d.toWalletId));
+    }
+    // V6 batch 3: money received into a V6 account is INCOME (never 'funding'), so funding is refused there.
+    function mvFundW(h, d, W) { return mvUseW(h, d, W) && !('role' in W); }
+    function mvTransferOk(h, d) {
+      return walletExists(h, d.fromWalletId) && walletExists(h, d.toWalletId) && d.fromWalletId != d.toWalletId
+        && mvTransferW(h, d, walletAfter(h, d.fromWalletId), walletAfter(h, d.toWalletId));
+    }
+    // No silent currency conversion: both wallets and the movement share one currency.
+    function mvTransferW(h, d, A, B) {
+      return mayUseWallet(h, A, 'transfer') && mayUseWallet(h, B, 'transfer')
+        && A.currency == d.currency && B.currency == d.currency && access2W(d, A, B)
+        && d.date >= A.get('openingDate', '') && d.date >= B.get('openingDate', '');   // never before either opening (v6DateOk, inlined: −6 cost)
+    }
+    // wallet ↔ Life Savings: exactly one wallet side; the linked savings event must be in the same batch.
+    function mvSavingsOk(h, movementId, d) {
+      return movementId == 'sv_' + d.savingsTransferId
+        && oneOf(d.fromWalletId, d.toWalletId)
+        && d.cycleId == null
+        && (d.fromWalletId != null
+              ? (walletExists(h, d.fromWalletId) && mvSavW(h, d, walletAfter(h, d.fromWalletId))
+                 && savingsLegOk(h, d.savingsTransferId + '_in', d.savingsTransferId, d.fromWalletId, d))
+              : (walletExists(h, d.toWalletId) && mvSavW(h, d, walletAfter(h, d.toWalletId))
+                 && savingsLegOk(h, d.savingsTransferId + '_out', d.savingsTransferId, d.toWalletId, d)));
+    }
+    // V6 batch 3 (F1): a Savings transfer never predates the account's opening (else it would vanish from the balance).
+    function mvSavW(h, d, W) { return mvUseW(h, d, W) && d.date >= W.get('openingDate', ''); }
+    function mvAdjustmentOk(h, d) {
+      return oneOf(d.fromWalletId, d.toWalletId)
+        && (d.toWalletId != null
+              ? (walletExists(h, d.toWalletId) && mvAdjW(h, d, walletAfter(h, d.toWalletId)))
+              : (walletExists(h, d.fromWalletId) && mvAdjW(h, d, walletAfter(h, d.fromWalletId))));
+    }
+    // V6 batch 3: V6 accounts use 'reconciliation' (balance-only, reason required), never 'adjustment'.
+    function mvAdjW(h, d, W) { return mvUseNoCurW(h, d, W) && !('role' in W); }
+
+    // ================================================================= V6 FINANCE (batch 1)
+    function keysOpt(req, opt) { return incoming().keys().hasAll(req) && incoming().keys().hasOnly(req.concat(opt)); }
+    function v6Path(h, c, id) { return /databases/$(database)/documents/homes/$(h)/$(c)/$(id); }
+    // Only V6 accounts (with `role`) get the V6 checks; wallets without a role behave exactly as before.
+    // openingDate is absent or an immutable YYYY-MM-DD; '' (absent) sorts before every date → no constraint.
+    function v6DateOk(d, W) { return d.date >= W.get('openingDate', ''); }
+    function v6WalletOk(d, W) { return !('role' in W) || ((d.paymentMethod != 'debit_card' || W.role == 'bank') && v6DateOk(d, W)); }
+    function v6PeriodRefOk(h, p) { return p == null || (p is string && existsAfter(v6Path(h, 'budgetPeriods', p))); }
+    // Batch 2: a new / changed attribution must target an OPEN period (closed periods are read-only).
+    function v6PeriodOpenOk(h, p) { return p == null || (p is string && existsAfter(v6Path(h, 'budgetPeriods', p)) && getAfter(v6Path(h, 'budgetPeriods', p)).data.status == 'open'); }
+    function v6ExpenseOk(h, d) {
+      return v6PeriodOpenOk(h, d.get('periodId', null)) && d.get('lateEntry', false) is bool
+        && (d.walletId == null || v6WalletOk(d, walletAfter(h, d.walletId)));
+    }
+    function v6ExpenseEditOk(h, d) {
+      return d.get('lateEntry', false) is bool && (!('periodId' in changed()) || v6PeriodOpenOk(h, d.get('periodId', null)))
+        && (d.walletId == null || v6WalletOk(d, walletAfter(h, d.walletId)));
+    }
+    function v6Unlocked(h, R) { return R.get('periodId', null) == null || get(v6Path(h, 'budgetPeriods', R.periodId)).data.status != 'closed'; }
+    // Money fields freeze once an expense was ever refunded; Zakat-linked expenses (zk_*) are owned by Zakat.
+    function v6MoneyLockOk(h, e) {
+      return !changed().hasAny(['amountMinor', 'walletId', 'date', 'currency'])
+        || (!e.matches('^zk_.*') && !exists(v6Path(h, 'refundLedgers', e)) && v6Unlocked(h, resource.data));
+    }
+    function v6VoidOk(h, e) {
+      return !e.matches('^zk_.*') && v6Unlocked(h, resource.data)
+        && (!exists(v6Path(h, 'refundLedgers', e)) || get(v6Path(h, 'refundLedgers', e)).data.refundedMinor == 0);
+    }
+    function mvExtraKeys(t) {
+      return t == 'savings' ? ['savingsTransferId'] : (t == 'income' ? ['source']
+        : (t == 'refund' ? ['refundOf', 'refundSeq', 'periodId', 'voidReason'] : (t == 'reconciliation' ? ['reason', 'beforeMinor', 'afterMinor', 'correctionSeq'] : [])));
+    }
+    function mvOne(d) { return d.toWalletId != null ? d.toWalletId : d.fromWalletId; }
+    // S1: one opening per account, id op_{wallet}, dated the account's openingDate, ± by direction.
+    function mvOpeningOk(h, movementId, d) {
+      return oneOf(d.fromWalletId, d.toWalletId) && d.cycleId == null && movementId == 'op_' + mvOne(d)
+        && walletExists(h, mvOne(d)) && mvOpeningW(h, d, walletAfter(h, mvOne(d)));
+    }
+    function mvOpeningW(h, d, W) { return 'openingDate' in W && W.openingDate == d.date && can(h, 'expenses', 'manageWallets') && mvUseW(h, d, W); }
+    // Income: received only (not after tomorrow), into one account, not before its opening.
+    function mvIncomeOk(h, d) {
+      return d.fromWalletId == null && d.cycleId == null && isOptionalText(d.source, 60)
+        && cleanDayTs(d.date) < request.time + duration.value(2, 'd')
+        && walletExists(h, d.toWalletId) && mvV6W(h, d, walletAfter(h, d.toWalletId));
+    }
+    function mvV6W(h, d, W) { return mvUseW(h, d, W) && v6DateOk(d, W); }
+    // Reconciliation: balance only (never income / spending / budget); a reason is required.
+    // V6.2.2: id rc_{wallet}_{n}; the wallet's correctionSeq must be n AFTER the batch, and the wallet rule only
+    // lets it advance by one together with rc_{wallet}_{n} (and needs wallet management) — so duplicates /
+    // concurrent stale corrections collide on the same create-only id;
+    // before / after must match the signed amount. Archived wallets are refused (mayUseWallet: active).
+    function mvReconOk(h, movementId, d) {
+      return oneOf(d.fromWalletId, d.toWalletId) && d.cycleId == null && isName(d.reason, 200)
+        && walletExists(h, mvOne(d)) && mvReconW(h, movementId, d, mvOne(d), walletAfter(h, mvOne(d)));
+    }
+    function mvReconW(h, movementId, d, w, W) {
+      return mvV6W(h, d, W) && d.correctionSeq is int && movementId == 'rc_' + w + '_' + string(d.correctionSeq)
+        && d.correctionSeq > 0 && W.get('correctionSeq', 0) == d.correctionSeq   // n-1 → n is enforced by the wallet rule (corrSeqOk)
+        && d.afterMinor is int && d.afterMinor - d.beforeMinor == (d.toWalletId != null ? d.amountMinor : -d.amountMinor);
+    }
+    // V6.2.2: correctionSeq only ever advances by one, and only together with its correction movement.
+    function corrSeqOk(h, w) {
+      return !('correctionSeq' in changed())
+        || (incoming().correctionSeq == resource.data.get('correctionSeq', 0) + 1
+            && existsAfter(/databases/$(database)/documents/homes/$(h)/walletMovements/$('rc_' + w + '_' + string(incoming().correctionSeq))));
+    }
+    // S3: refund {expenseId}_rf{n} — same account / currency as the original, paired with its ledger.
+    function mvRefundOk(h, movementId, d) {
+      return d.fromWalletId == null && d.cycleId == null && d.voidReason == null && d.refundOf is string && d.refundSeq is int
+        && movementId == d.refundOf + '_rf' + string(d.refundSeq)
+        && v6PeriodRefOk(h, d.periodId)
+        && mvRefundE(h, d, get(v6Path(h, 'expenses', d.refundOf)).data)
+        && getAfter(v6Path(h, 'refundLedgers', d.refundOf)).data.refundSeq == d.refundSeq
+        && walletExists(h, d.toWalletId) && mvUseNoCurW(h, d, walletAfter(h, d.toWalletId));
+    }
+    // Currency: E.currency == d.currency, and the expense rule proved E.currency == wallet currency.
+    // Opening date: d.date ≥ E.date, and E was date-checked against the opening when created.
+    // Permission: mayUseWallet(…, 'transfer') inside mvUseNoCurW.
+    function mvRefundE(h, d, E) { return E.status == 'active' && E.walletId == d.toWalletId && E.currency == d.currency && d.date >= E.date; }
+    // Refund void: only the latest created refund, with a reason, in an open (or no) period, paired with the ledger.
+    function mvRefundVoidOk(h, R) {
+      return isName(incoming().voidReason, 200)
+        && get(v6Path(h, 'refundLedgers', R.refundOf)).data.refundSeq == R.refundSeq
+        && getAfter(v6Path(h, 'refundLedgers', R.refundOf)).data.refundedMinor == get(v6Path(h, 'refundLedgers', R.refundOf)).data.refundedMinor - R.amountMinor
+        && (R.periodId == null || get(v6Path(h, 'budgetPeriods', R.periodId)).data.status == 'open')
+        && mayUseWallet(h, walletAfter(h, R.toWalletId), 'transfer');
+    }
+    function rlRefundOk(h, e, seq, before) {
+      return !exists(v6Path(h, 'walletMovements', e + '_rf' + string(seq)))
+        && rlNewR(getAfter(v6Path(h, 'walletMovements', e + '_rf' + string(seq))).data, e, seq, before)
+        && incoming().refundedMinor <= get(v6Path(h, 'expenses', e)).data.amountMinor;
+    }
+    function rlNewR(R, e, seq, before) { return R.type == 'refund' && R.refundOf == e && R.refundSeq == seq && R.status == 'active' && incoming().refundedMinor == before + R.amountMinor; }
+    function rlVoidOk(h, e, L) {
+      return get(v6Path(h, 'walletMovements', e + '_rf' + string(L.refundSeq))).data.status == 'active'
+        && getAfter(v6Path(h, 'walletMovements', e + '_rf' + string(L.refundSeq))).data.status == 'void'
+        && incoming().refundedMinor == L.refundedMinor - get(v6Path(h, 'walletMovements', e + '_rf' + string(L.refundSeq))).data.amountMinor;
+    }
+    function bhPath(h) { return v6Path(h, 'budgetHead', 'primary'); }
+    // Batch 2: the change record must describe exactly this edit (from = stored cap, to = new cap, same rev).
+    function capChangeOk(C, before, after) {
+      return C.fromMinor == before.capMinor && C.toMinor == after.capMinor && C.rev == after.rev && C.actorUid == request.auth.uid;
+    }
+    // F3: periods are created only through the serialized head (non-overlapping, half-open).
+    function bhNextOk(h, p, d) {
+      return getAfter(bhPath(h)).data.lastPeriodId == p && getAfter(bhPath(h)).data.endDateExclusive == d.endDateExclusive
+        && (exists(bhPath(h))
+              ? (d.startDate >= get(bhPath(h)).data.endDateExclusive && getAfter(bhPath(h)).data.rev == get(bhPath(h)).data.rev + 1)
+              : getAfter(bhPath(h)).data.rev == 1);
+    }
+
+    // ---------------------------------------------------------------- budget edits (Phase 5.3)
+    function cyclePath(h, c) { return /databases/$(database)/documents/homes/$(h)/spendingCycles/$(c); }
+    function budgetAdjPath(h, id) { return /databases/$(database)/documents/homes/$(h)/budgetAdjustments/$(id); }
+    // B = stored (pre-batch) cycle, A = cycle after the batch. The record must describe exactly
+    // this transition: same revision step, same amounts, delta, editor, currency, wallet, labels.
+    function budgetAdjOk(d, B, A) {
+      return B.status == 'active'
+        && B.get('budgetRevision', 0) + 1 == d.revision && A.get('budgetRevision', 0) == d.revision
+        && d.oldBudgetMinor == B.budgetMinor && d.newBudgetMinor == A.budgetMinor
+        && isMoney(d.newBudgetMinor) && d.deltaMinor == d.newBudgetMinor - d.oldBudgetMinor
+        && d.editorUid == request.auth.uid && d.createdAt == request.time
+        && d.currency == B.currency && d.walletId == B.walletId
+        && d.audience == B.get('audience', 'household') && d.readers == B.get('readers', [])
+        && isOptionalText(d.reason, 200) && d.schemaVersion == 1;
+    }
+
+    // ---------------------------------------------------------------- cleaning (Phase 5.3)
+    function cleanTaskPath(h, t) { return /databases/$(database)/documents/homes/$(h)/cleaningTasks/$(t); }
+    function cleanOccPath(h, o) { return /databases/$(database)/documents/homes/$(h)/cleaningOccurrences/$(o); }
+    function cleanLogPath(h, l) { return /databases/$(database)/documents/homes/$(h)/cleaningLog/$(l); }
+    function cleanRecurrenceOk(r) {
+      return r is map && r.keys().hasOnly(['kind', 'interval', 'weekdays', 'dayOfMonth', 'unit'])
+        && r.kind in ['once', 'days', 'weeks', 'months', 'after', 'onUse', 'onSeason']
+        && (r.kind in ['once', 'onUse', 'onSeason'] ? r.keys().hasOnly(['kind'])
+          // Phase 5.3.1: N days / months after the last completion (standalone template semantics)
+          : r.kind == 'after' ? (r.keys().hasOnly(['kind', 'unit', 'interval']) && r.interval is int && r.interval >= 1
+                                 && (r.unit == 'day' ? r.interval <= 365 : (r.unit == 'month' && r.interval <= 12)))
+            : (r.interval is int && r.interval >= 1 && r.interval <= 52
+               && (r.kind == 'days' ? r.keys().hasOnly(['kind', 'interval'])
+                   : (r.kind == 'weeks'
+                        ? (r.weekdays is list && r.weekdays.size() >= 1 && r.weekdays.size() <= 7 && r.weekdays.hasOnly([0, 1, 2, 3, 4, 5, 6]))
+                        : (r.dayOfMonth is int && r.dayOfMonth >= 1 && r.dayOfMonth <= 31)))));
+    }
+    function cleanTaskContentOk(h, d) {
+      // manual tasks ≤ 80; generated (template) tasks keep their library title ≤ 120 when edited
+      return isName(d.title, (d.get('source', null) == null && d.get('templateRef', null) == null) ? 80 : 120) && isOptionalText(d.instructions, 1000)
+        && d.priority in ['low', 'normal', 'high']
+        && d.assigneeUids is list && d.assigneeUids.size() <= 5 && d.eligibleUids is list && d.eligibleUids.size() <= 5
+        && (d.assignMode == 'assigned'
+              ? (d.assigneeUids.size() >= 1 && d.eligibleUids == [] && membersOf(h, d.assigneeUids))
+              : (d.assignMode == 'shared' && d.assigneeUids == [] && membersOf(h, d.eligibleUids)))
+        && cleanRecurrenceOk(d.recurrence)
+        && d.startDate is string && isOptionalDate(d.startDate)
+        && (d.recurrence.kind == 'once'
+              ? (d.dueDate is string && isOptionalDate(d.dueDate) && d.dueDate >= d.startDate)
+              : d.dueDate == null)
+        && (d.endDate == null || (isOptionalDate(d.endDate) && d.endDate >= d.startDate))
+        && isOptionalId(d.roomId);
+    }
+    // May the caller act on task T? complete permission + assigned to them, or shared and eligible.
+    // Shared with an empty list = every ADULT member; a child acts only when explicitly listed.
+    function cleanMayAct(h, T) {
+      return T.active == true && can(h, 'cleaning', 'complete')
+        && (T.assignMode == 'assigned' ? request.auth.uid in T.assigneeUids
+            : (T.eligibleUids.size() > 0 ? request.auth.uid in T.eligibleUids : !isChildMember(h, request.auth.uid)));
+    }
+    function cleanDateOk(T, date) {
+      return T.active == true && date >= T.startDate && (T.endDate == null || date <= T.endDate)
+        && (T.recurrence.kind != 'once' || date == T.dueDate);
+    }
+    // The audit entry for revision `rev` exists after the batch, with this action and actor.
+    function cleanLogOk(h, occId, rev, action) {
+      return existsAfter(cleanLogPath(h, occId + '_r' + string(rev)))
+        && cleanLogMatches(getAfter(cleanLogPath(h, occId + '_r' + string(rev))).data, occId, rev, action);
+    }
+    function cleanLogMatches(L, occId, rev, action) {
+      return L.occurrenceId == occId && L.rev == rev && L.action == action && L.actorUid == request.auth.uid;
+    }
+    function cleanClaimFields(d) {
+      return d.claimedBy == request.auth.uid && d.claimedAt == request.time && d.completedBy == null && d.completedAt == null;
+    }
+    function cleanCompleteFields(d) {
+      return d.completedBy == request.auth.uid && d.completedAt == request.time && isOptionalText(d.notes, 300);
+    }
+    function cleanClearedFields(d) {
+      return d.claimedBy == null && d.claimedAt == null && d.completedBy == null && d.completedAt == null;
+    }
+    // Update dispatch on the NEW status (exclusive transitions). R = stored occurrence, T = task.
+    // ---- Phase 5.4a: skip / postpone / resume / time tracking -------------------------------------
+    // Calendar date string → timestamp (for server-time bounds on skippedOn / postponedTo / routine day).
+    function cleanDayTs(s) { return timestamp.date(int(s.split('-')[0]), int(s.split('-')[1]), int(s.split('-')[2])); }
+    function cleanNearToday(s) {
+      return s is string && isOptionalDate(s)
+        && cleanDayTs(s) > request.time - duration.value(2, 'd') && cleanDayTs(s) < request.time + duration.value(2, 'd');
+    }
+    // A postponement: a date after the due date, from about today up to 30 days ahead.
+    function cleanPostponeOk(p, due) {
+      return p is string && isOptionalDate(p) && p > due
+        && cleanDayTs(p) > request.time - duration.value(1, 'd') && cleanDayTs(p) <= request.time + duration.value(31, 'd');
+    }
+    function cleanActualMinutesOk(d) { return !('actualMinutes' in d) || d.actualMinutes == null || cleanMinutesOk(d.actualMinutes); }
+    // Each optional field may change only in its own transition.
+    function cleanOptOk(key, allowed) { return allowed || !(key in changed()); }
+    function cleanOptChangesOk(status) {
+      return cleanOptOk('actualMinutes', status == 'done')
+        && cleanOptOk('skippedOn', status in ['skipped', 'open'])
+        && cleanOptOk('postponedTo', status in ['postponed', 'open']);
+    }
+    function cleanNoProgress(d) {   // a skip / postpone is never a claim or a completion
+      return d.claimedBy == null && d.claimedAt == null && d.completedBy == null && d.completedAt == null;
+    }
+    // First action on a date (rev 1): dispatch on the status (exclusive).
+    function cleanOccCreateOk(h, occId, d) {
+      return d.status == 'claimed'
+        ? (cleanClaimFields(d) && d.notes == null && !('skippedOn' in d) && !('postponedTo' in d) && !('actualMinutes' in d) && cleanLogOk(h, occId, 1, 'claim'))
+        : (d.status == 'done'
+            ? (d.claimedBy == null && d.claimedAt == null && cleanCompleteFields(d) && cleanActualMinutesOk(d)
+               && !('skippedOn' in d) && !('postponedTo' in d) && cleanLogOk(h, occId, 1, 'complete'))
+            : (d.status == 'skipped'
+                ? (cleanNoProgress(d) && d.notes == null && cleanNearToday(d.skippedOn) && !('postponedTo' in d) && !('actualMinutes' in d)
+                   && cleanLogOk(h, occId, 1, 'skip'))
+                : (d.status == 'postponed' && cleanNoProgress(d) && d.notes == null && cleanPostponeOk(d.postponedTo, d.dueDate)
+                   && !('skippedOn' in d) && !('actualMinutes' in d) && cleanLogOk(h, occId, 1, 'postpone')
+                   && getAfter(cleanLogPath(h, occId + '_r1')).data.postponedTo == d.postponedTo)));
+    }
+    // Update dispatch on the NEW status (exclusive transitions). R = stored occurrence, T = task.
+    function cleanOccUpdateOk(h, occId, d, R, T) {
+      return d.status == 'claimed'
+        ? (R.status in ['open', 'skipped'] && cleanMayAct(h, T) && cleanClaimFields(d) && cleanLogOk(h, occId, d.rev, 'claim'))
+        : (d.status == 'done'
+            ? ((R.status in ['open', 'skipped', 'postponed'] ? cleanMayAct(h, T)
+                // V6.3: no claim-before-completion — a claimed record is completable by its claimer, an editor or
+                // anyone ELIGIBLE for the task (same right as an open one); eligibility / privacy unchanged.
+                : (R.status == 'claimed' && (R.claimedBy == request.auth.uid || can(h, 'cleaning', 'edit') || cleanMayAct(h, T))))
+               && cleanCompleteFields(d) && cleanActualMinutesOk(d) && cleanLogOk(h, occId, d.rev, 'complete'))
+            : (d.status == 'skipped'
+                ? (R.status in ['open', 'skipped'] && cleanMayAct(h, T) && cleanNoProgress(d) && cleanNearToday(d.skippedOn)
+                   && cleanLogOk(h, occId, d.rev, 'skip'))
+                : (d.status == 'postponed'
+                    ? (R.status in ['open', 'skipped'] && cleanMayAct(h, T) && cleanNoProgress(d) && cleanPostponeOk(d.postponedTo, R.dueDate)
+                       && cleanLogOk(h, occId, d.rev, 'postpone')
+                       && getAfter(cleanLogPath(h, occId + '_r' + string(d.rev))).data.postponedTo == d.postponedTo)
+                    : (d.status == 'open' && cleanClearedFields(d)
+                       && (R.status == 'claimed'
+                            ? ((R.claimedBy == request.auth.uid || can(h, 'cleaning', 'edit')) && cleanLogOk(h, occId, d.rev, 'unclaim'))
+                            : (R.status == 'done'
+                                ? ((R.completedBy == request.auth.uid || isGuardianOf(h, R.completedBy) || can(h, 'cleaning', 'edit'))
+                                   && cleanLogOk(h, occId, d.rev, 'reopen'))   // V6.1: one-tap reopen — the note is optional (audit entry still required)
+                                : (R.status in ['skipped', 'postponed'] && d.get('skippedOn', null) == null && d.get('postponedTo', null) == null
+                                   && (R.updatedBy == request.auth.uid || cleanMayAct(h, T) || can(h, 'cleaning', 'edit'))
+                                   && cleanLogOk(h, occId, d.rev, 'resume'))))))));
+    }
+
+    // ---------------------------------------------------------------- cleaning templates (Phase 5.3.1)
+    function cleanMinutesOk(m) { return m is int && m >= 1 && m <= 600; }
+    // A task generated from a room/device template. The id is DETERMINISTIC (r_|d_ + source id + key),
+    // so the same template task can exist only once per room/device; create-only semantics make a
+    // second (or concurrent) setup fail. Declined template tasks are created archived (tombstones).
+    function cleanGeneratedOk(h, taskId, d) {
+      return d.keys().hasAll(['title', 'instructions', 'roomId', 'priority', 'assignMode', 'assigneeUids', 'eligibleUids', 'recurrence',
+                        'startDate', 'dueDate', 'endDate', 'active', 'archivedAt', 'archivedBy', 'createdBy', 'createdAt',
+                        'updatedBy', 'updatedAt', 'schemaVersion', 'source', 'estimatedMinutes'])
+        && d.keys().hasOnly(['title', 'instructions', 'roomId', 'priority', 'assignMode', 'assigneeUids', 'eligibleUids', 'recurrence',
+                        'startDate', 'dueDate', 'endDate', 'active', 'archivedAt', 'archivedBy', 'createdBy', 'createdAt',
+                        'updatedBy', 'updatedAt', 'schemaVersion', 'source', 'estimatedMinutes', 'trigger'])
+        // fixed, simple shape (cheaper and stricter than the manual-task validator):
+        // generated titles come verbatim from the standalone library (longest: 83) → ≤ 120
+        && isName(d.title, 120) && isOptionalText(d.instructions, 1000) && d.priority in ['low', 'normal', 'high']
+        && d.assignMode == 'shared' && d.assigneeUids == [] && d.eligibleUids == []
+        && d.recurrence is map && d.recurrence.keys().hasOnly(['kind', 'unit', 'interval'])
+        // Phase 5.4b: device-triggered templates use onUse / onSeason; all others the 'after' schedule
+        && (d.recurrence.kind in ['onUse', 'onSeason'] ? d.recurrence.keys().hasOnly(['kind'])
+            : (d.recurrence.kind == 'after' && d.recurrence.interval is int && d.recurrence.interval >= 1
+               && (d.recurrence.unit == 'day' ? d.recurrence.interval <= 365 : (d.recurrence.unit == 'month' && d.recurrence.interval <= 12))))
+        && cleanTriggerOk(h, d)
+        && (d.get('trigger', null) == null || (d.source.kind == 'device' && d.trigger.deviceId == d.source.id))
+        && d.startDate is string && isOptionalDate(d.startDate) && d.dueDate == null && d.endDate == null
+        && cleanMinutesOk(d.estimatedMinutes)
+        && d.source is map && d.source.keys().hasOnly(['kind', 'id', 'typeKey', 'templateKey', 'templateVersion'])
+        && d.source.id is string && d.source.typeKey is string && d.source.templateVersion is int
+        && d.source.templateKey is string && d.source.templateKey.matches('^[a-z0-9_]{1,40}$')
+        && (d.source.kind == 'room'
+              ? (taskId == 'r_' + d.source.id + '_' + d.source.templateKey && d.roomId == d.source.id && isActiveRoom(h, d.source.id))
+              : (d.source.kind == 'device' && taskId == 'd_' + d.source.id + '_' + d.source.templateKey && d.roomId == null
+                 && exists(/databases/$(database)/documents/homes/$(h)/devices/$(d.source.id))
+                 && get(/databases/$(database)/documents/homes/$(h)/devices/$(d.source.id)).data.active == true))
+        && (d.active == true
+              ? (d.archivedAt == null && d.archivedBy == null)
+              : (d.active == false && d.archivedAt == request.time && d.archivedBy == request.auth.uid));
+    }
+
+    // ---------------------------------------------------------------- device usage & seasons (Phase 5.4b)
+    function cleanDevicePath(h, d) { return /databases/$(database)/documents/homes/$(h)/devices/$(d); }
+    function cleanEventPath(h, e) { return /databases/$(database)/documents/homes/$(h)/cleaningDeviceEvents/$(e); }
+    function cleanStatePath(h, d) { return /databases/$(database)/documents/homes/$(h)/cleaningDeviceState/$(d); }
+    function cleanSeasonPath(h, id) { return /databases/$(database)/documents/homes/$(h)/cleaningDeviceSeasons/$(id); }
+    function cleanActiveDevice(h, d) { return d is string && exists(cleanDevicePath(h, d)) && get(cleanDevicePath(h, d)).data.active == true; }
+    // Optional, immutable task trigger: an active device of THIS home; phase consistent with recurrence.
+    function cleanTriggerOk(h, d) {
+      return d.get('trigger', null) == null
+        ? !(d.recurrence.kind in ['onUse', 'onSeason'])
+        : (d.trigger is map && d.trigger.keys().hasOnly(['kind', 'deviceId', 'phase']) && cleanActiveDevice(h, d.trigger.deviceId)
+           && (d.trigger.kind == 'afterUse'
+                ? (!('phase' in d.trigger) && d.recurrence.kind == 'onUse')
+                : (d.trigger.kind == 'seasonal'
+                   && (d.trigger.phase == 'active' ? !(d.recurrence.kind in ['onUse', 'onSeason', 'once'])
+                       : (d.trigger.phase in ['start', 'end'] && d.recurrence.kind == 'onSeason')))));
+    }
+    // Occurrence id: date-based (unchanged), or keyed by the triggering use event / season transition.
+    function cleanOccIdOk(h, occId, d, T) {
+      return 'triggerEventId' in d
+        ? (!('triggerSeasonRev' in d) && d.triggerEventId is string && T.get('trigger', null) != null && T.trigger.kind == 'afterUse'
+           && occId == d.taskId + '_u' + d.triggerEventId && exists(cleanEventPath(h, d.triggerEventId))
+           && cleanUseOf(get(cleanEventPath(h, d.triggerEventId)).data, T.trigger.deviceId))
+        : ('triggerSeasonRev' in d
+            ? (d.triggerSeasonRev is int && T.get('trigger', null) != null && T.trigger.kind == 'seasonal' && T.trigger.phase in ['start', 'end']
+               && occId == d.taskId + '_s' + string(d.triggerSeasonRev)
+               && exists(cleanSeasonPath(h, T.trigger.deviceId + '_s' + string(d.triggerSeasonRev)))
+               && get(cleanSeasonPath(h, T.trigger.deviceId + '_s' + string(d.triggerSeasonRev))).data.state == (T.trigger.phase == 'start' ? 'active' : 'inactive'))
+            : (occId == d.taskId + '_' + d.dueDate.replace('-', '') && !(T.recurrence.kind in ['onUse', 'onSeason'])));   // event tasks: never date-keyed
+    }
+    function cleanUseOf(E, deviceId) { return E.kind == 'use' && E.deviceId == deviceId; }
+    // Phase 5.4d: plain device link on a non-trigger, non-generated task — an ACTIVE device of THIS home.
+    function cleanDeviceLinkOk(h, d) {
+      return d.get('deviceId', null) == null
+        || (d.get('trigger', null) == null && d.get('source', null) == null && cleanActiveDevice(h, d.deviceId));
+    }
+    function cleanSeasonEntryOk(h, deviceId, d) {
+      return existsAfter(cleanSeasonPath(h, deviceId + '_s' + string(d.rev)))
+        && getAfter(cleanSeasonPath(h, deviceId + '_s' + string(d.rev))).data.state == d.state
+        && getAfter(cleanSeasonPath(h, deviceId + '_s' + string(d.rev))).data.actorUid == request.auth.uid;
+    }
+
+    // ---------------------------------------------------------------- custom templates (Phase 5.4c)
+    function cleanTemplatePath(h, id) { return /databases/$(database)/documents/homes/$(h)/cleaningCustomTemplates/$(id); }
+    // A task created from a custom template: deterministic id c_<templateId>_<target> (target = trigger
+    // device, else room, else 'home'), so the same template on the same target exists once.
+    function cleanTemplateRefOk(h, taskId, d) {
+      return d.templateRef is map && d.templateRef.keys().hasOnly(['templateId', 'rev'])
+        && d.templateRef.templateId is string && d.templateRef.rev is int
+        && taskId == 'c_' + d.templateRef.templateId + '_'
+             + (d.get('trigger', null) != null ? d.trigger.deviceId
+                : (d.get('deviceId', null) != null ? d.deviceId : (d.roomId != null ? d.roomId : 'home')))
+        && exists(cleanTemplatePath(h, d.templateRef.templateId))
+        && get(cleanTemplatePath(h, d.templateRef.templateId)).data.active == true;
+    }
+    // Template-derived task: a fixed, simple shape (like generated tasks) — cheaper and stricter than the
+    // manual validator, and dispatched separately so a denial evaluates only this branch.
+    function cleanTemplatedOk(h, taskId, d) {
+      return d.keys().hasAll(['title', 'instructions', 'roomId', 'priority', 'assignMode', 'assigneeUids', 'eligibleUids', 'recurrence',
+                        'startDate', 'dueDate', 'endDate', 'active', 'archivedAt', 'archivedBy', 'createdBy', 'createdAt',
+                        'updatedBy', 'updatedAt', 'schemaVersion', 'templateRef', 'estimatedMinutes'])
+        && d.keys().hasOnly(['title', 'instructions', 'roomId', 'priority', 'assignMode', 'assigneeUids', 'eligibleUids', 'recurrence',
+                        'startDate', 'dueDate', 'endDate', 'active', 'archivedAt', 'archivedBy', 'createdBy', 'createdAt',
+                        'updatedBy', 'updatedAt', 'schemaVersion', 'templateRef', 'estimatedMinutes', 'trigger', 'deviceId'])
+        && isName(d.title, 120) && isOptionalText(d.instructions, 1000) && d.priority in ['low', 'normal', 'high']
+        && d.assignMode == 'shared' && d.assigneeUids == [] && d.eligibleUids == []
+        && cleanRecurrenceOk(d.recurrence) && d.recurrence.kind != 'once'
+        && d.startDate is string && isOptionalDate(d.startDate) && d.dueDate == null && d.endDate == null
+        && (d.roomId == null || isActiveRoom(h, d.roomId))
+        && d.active == true && d.archivedAt == null && d.archivedBy == null
+        && cleanMinutesOk(d.estimatedMinutes)
+        && cleanTriggerOk(h, d)
+        && cleanDeviceLinkOk(h, d)
+        && cleanTemplateRefOk(h, taskId, d);
+    }
+    // Template definition content (one reusable task definition; no dates, so never 'once').
+    function cleanTemplateContentOk(d) {
+      return d.pack is string && d.pack.size() >= 1 && d.pack.size() <= 60
+        && isName(d.title, 120) && (d.titleEn == null || isName(d.titleEn, 120)) && isOptionalText(d.instructions, 1000)
+        && cleanMinutesOk(d.minutes) && d.priority in ['low', 'normal', 'high'] && d.target in ['room', 'device', 'home']
+        && cleanRecurrenceOk(d.recurrence) && d.recurrence.kind != 'once'
+        && (d.trigger == null
+              ? !(d.recurrence.kind in ['onUse', 'onSeason'])   // Phase 5.4d: a periodic device template is allowed
+              : (d.target == 'device' && d.trigger is map && d.trigger.keys().hasOnly(['kind', 'phase'])
+                 && (d.trigger.kind == 'afterUse'
+                      ? (!('phase' in d.trigger) && d.recurrence.kind == 'onUse')
+                      : (d.trigger.kind == 'seasonal'
+                         && (d.trigger.phase == 'active' ? !(d.recurrence.kind in ['onUse', 'onSeason'])
+                             : (d.trigger.phase in ['start', 'end'] && d.recurrence.kind == 'onSeason'))))));
+    }
+
+    // ================================================================= MAINTENANCE (Phase 5.5)
+    function mtCan(h, a) { return can(h, 'maintenance', a); }
+    function mtPath(h, c, id) { return /databases/$(database)/documents/homes/$(h)/$(c)/$(id); }
+    function mtDate(v) { return v is string && v.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$'); }
+    function mtActiveDevice(h, d) {
+      return d is string && exists(mtPath(h, 'devices', d)) && get(mtPath(h, 'devices', d)).data.active == true;
+    }
+    // Optional assignee: none, or an ACTIVE member of THIS home.
+    function mtMemberOk(h, u) {
+      return u == null || (u is string && exists(mtPath(h, 'members', u)) && get(mtPath(h, 'members', u)).data.status == 'active');
+    }
+    function mtRecurrenceOk(r) {
+      return r is map && (r.kind == 'once'
+        ? r.keys().hasOnly(['kind'])
+        : (r.kind == 'every' && r.keys().hasOnly(['kind', 'unit', 'interval']) && r.interval is int && r.interval >= 1
+           && (r.unit == 'day' ? r.interval <= 365 : (r.unit == 'week' ? r.interval <= 52 : (r.unit == 'month' && r.interval <= 24)))));
+    }
+    // Actual cost / estimate: both absent, or a non-negative integer (minor units) with an ISO-like currency.
+    function mtMoneyOk(m, c) {
+      return m == null ? c == null : (m is int && m >= 0 && m <= 100000000 && c is string && c.matches('^[A-Z]{3}$'));
+    }
+    function mtPlanContentOk(d) {
+      return isName(d.title, 120) && isOptionalText(d.instructions, 2000) && isOptionalText(d.notes, 1000)
+        && mtRecurrenceOk(d.recurrence) && mtDate(d.firstDueDate) && d.priority in ['low', 'normal', 'high']
+        && (d.estimatedMinutes == null || (d.estimatedMinutes is int && d.estimatedMinutes >= 1 && d.estimatedMinutes <= 1440));
+    }
+    function mtFaultContentOk(d) {
+      return isName(d.summary, 120) && isOptionalText(d.description, 2000) && isOptionalText(d.diagnosis, 2000)
+        && isOptionalText(d.resolution, 2000) && d.severity in ['low', 'medium', 'high', 'critical']
+        && mtMoneyOk(d.estimateMinor, d.estimateCurrency);
+    }
+    function mtServiceOk(d) {
+      return mtDate(d.serviceDate)
+        && cleanDayTs(d.serviceDate) < request.time + duration.value(2, 'd') && cleanDayTs(d.serviceDate) > request.time - duration.value(1100, 'd')
+        && isOptionalText(d.workPerformed, 1000) && isOptionalText(d.provider, 100) && isOptionalText(d.parts, 500) && isOptionalText(d.notes, 1000)
+        && mtMoneyOk(d.costMinor, d.currency);
+    }
+    // Fault transitions (exclusive dispatch on the target status). F = stored fault, d = after.
+    function mtTransitionOk(h, F, d) {
+      return d.status == F.status
+        ? (F.status != 'closed' && mtCan(h, 'edit') && d.resolvedAt == F.resolvedAt && d.closedAt == F.closedAt)
+        : (d.status == 'inProgress'
+            ? (F.status == 'open' ? mtCan(h, 'complete')
+                : (F.status == 'resolved' && mtCan(h, 'edit') && d.resolvedAt == null && d.resolvedBy == null))
+            : (d.status == 'open'
+                ? (F.status == 'inProgress' ? mtCan(h, 'complete') : (F.status == 'cancelled' && mtCan(h, 'edit')))
+                : (d.status == 'resolved'
+                    ? (F.status == 'inProgress' && mtCan(h, 'complete') && d.resolvedAt == request.time && d.resolvedBy == request.auth.uid)
+                    : (d.status == 'closed'
+                        ? (F.status == 'resolved' && mtCan(h, 'edit') && d.closedAt == request.time && d.closedBy == request.auth.uid)
+                        : (d.status == 'cancelled' && F.status in ['open', 'inProgress'] && mtCan(h, 'edit'))))));
+    }
+
+
+    // ================================================================= V6.1 RECIPES + COOKING TIMERS
+    function recTitleOk(t) { return t == null || (t is string && t.trim().size() > 0 && t.size() <= 120); }
+    function recipeContentOk(d) {
+      return recTitleOk(d.titleEn) && recTitleOk(d.titleAr) && (d.titleEn != null || d.titleAr != null)
+        && isOptionalText(d.description, 1000) && isOptionalText(d.notes, 2000)
+        && d.category in ['breakfast', 'main', 'side', 'soup', 'salad', 'dessert', 'baking', 'drink', 'snack', 'other']
+        && d.prepMinutes is int && d.prepMinutes >= 0 && d.prepMinutes <= 1440
+        && d.cookMinutes is int && d.cookMinutes >= 0 && d.cookMinutes <= 1440
+        && d.servings is int && d.servings >= 1 && d.servings <= 100
+        && (d.videoId == null || (d.videoId is string && d.videoId.matches('^[A-Za-z0-9_-]{11}$')))
+        // V6.1.1: other video pages = a safe https LINK only (no '@' or ':' can occur in the host); never both.
+        && (d.get('videoUrl', null) == null
+              || (d.videoUrl is string && d.videoUrl.size() <= 500 && d.videoId == null
+                  && d.videoUrl.matches('^https:[/][/][A-Za-z0-9.-]{1,253}[.][A-Za-z]{2,}(/[^\\s<>"]*)?$')))
+        && d.ingredients is list && d.ingredients.size() <= 100 && d.steps is list && d.steps.size() <= 60;
+    }
+    // Favorites: a viewer may add or remove ONLY their own uid (symmetric difference == {me}).
+    function favOnlyMine(a, b) {
+      return b is list && b.size() <= 200
+        && b.toSet().difference(a.toSet()).union(a.toSet().difference(b.toSet())) == [request.auth.uid].toSet();
+    }
+    function timerOk(d) {
+      return isName(d.label, 60) && d.durationMs is int && d.durationMs >= 1000 && d.durationMs <= 86400000
+        && d.status in ['idle', 'running', 'paused', 'completed', 'dismissed']   // V6.1.1: completed = ringing until dismissed
+        && (d.status == 'running'
+              ? (d.endsAtMs is int && d.remainingMsAtPause == null
+                 && d.endsAtMs >= request.time.toMillis() - 120000 && d.endsAtMs <= request.time.toMillis() + d.durationMs + 120000)
+              : d.endsAtMs == null)
+        && (d.status == 'paused' ? (d.remainingMsAtPause is int && d.remainingMsAtPause >= 0 && d.remainingMsAtPause <= d.durationMs)
+                                 : (d.status == 'running' || d.remainingMsAtPause == null))
+        && (d.recipeId == null || (d.recipeId is string && d.recipeId.size() <= 40))
+        && (d.stepId == null || (d.stepId is string && d.stepId.size() <= 20));
+    }
+
+
+    // ================================================================= V6.2 CALENDAR + MONTHLY BUDGET
+    function calTimeOk(v) { return v == null || (v is string && v.matches('^([01][0-9]|2[0-3]):[0-5][0-9]$')); }
+    function calContentOk(d) {
+      return isName(d.title, 120) && d.type in ['work', 'vacation', 'task', 'reminder', 'other'] && d.allDay is bool
+        && d.startDate != null && isOptionalDate(d.startDate) && d.endDate != null && isOptionalDate(d.endDate) && d.endDate >= d.startDate
+        && calTimeOk(d.startTime) && calTimeOk(d.endTime) && (d.allDay ? (d.startTime == null && d.endTime == null) : (d.startTime != null && d.endTime != null))
+        && isOptionalText(d.description, 1000) && isOptionalText(d.location, 200) && d.done is bool
+        // V6.2.2 shift subtype (optional on older events): day / night shifts are always Work
+        && d.get('shift', null) in [null, 'day', 'night'] && (d.get('shift', null) == null || d.type == 'work');
+    }
+    // Household events: calendar permissions. Private events: their creator only (no admin override).
+    function calMine(d) { return d.createdBy == request.auth.uid; }
+    function calMayWrite(h, d, action) { return can(h, 'calendar', action) && (d.audience == 'household' || calMine(d)); }
+    // V6.2.1 CSV import batches: an imported event must name an OPEN batch of its importer, same audience.
+    function calBatchDoc(h, id) { return /databases/$(database)/documents/homes/$(h)/calendarImports/$(id); }
+    function calBatchOpen(h, d) {
+      return d.importBatchId is string && d.importBatchId.matches('^[A-Za-z0-9_-]{6,40}$') && exists(calBatchDoc(h, d.importBatchId))
+        && get(calBatchDoc(h, d.importBatchId)).data.createdBy == request.auth.uid
+        && get(calBatchDoc(h, d.importBatchId)).data.status == 'importing'
+        && get(calBatchDoc(h, d.importBatchId)).data.audience == d.audience;
+    }
+    function calCount(v) { return v is int && v >= 0 && v <= 500; }
+    // Monthly budget setting 'YYYY-MM': owner / admin; never a past month (one month of slack for time zones).
+    function monthIndex(id) { return int(id.split('-')[0]) * 12 + int(id.split('-')[1]); }
+    function monthWritable(id) { return monthIndex(id) >= request.time.year() * 12 + request.time.month() - 1; }
+
+    // ================================================================= users/{uid}
+    // Private identity/preferences document. Only its owner can read or write it.
+    match /users/{uid} {
+      allow get: if isSelf(uid);
+      allow list: if false;
+
+      allow create: if isSelf(uid)
+        && exactKeys(['email', 'displayName', 'defaultHomeId', 'language', 'theme',
+                      'schemaVersion', 'createdAt', 'updatedAt'])
+        && isEmail(incoming().email)
+        && isName(incoming().displayName, 60)
+        && isLanguage(incoming().language)
+        && isTheme(incoming().theme)
+        && incoming().schemaVersion == 1
+        && stampedNow('createdAt') && stampedNow('updatedAt')
+        && isValidDefaultHome(incoming().defaultHomeId);
+
+      allow update: if isSelf(uid)
+        && changed().hasOnly(['displayName', 'defaultHomeId', 'language', 'theme', 'updatedAt'])
+        && isName(incoming().displayName, 60)
+        && isLanguage(incoming().language)
+        && isTheme(incoming().theme)
+        && stampedNow('updatedAt')
+        && (!('defaultHomeId' in changed()) || isValidDefaultHome(incoming().defaultHomeId));
+
+      allow delete: if false;
+    }
+
+    // ================================================================= homes/{h}
+    match /homes/{h} {
+      // Phase 5.1: the stored creator may read their OWN home while they have no membership
+      // there (adoption detection only). No list; nobody else.
+      allow get: if isActiveMember(h)
+        || (signedIn() && resource.data.get('createdBy', '') == request.auth.uid && !exists(myMemberDoc(h)));
+      allow list: if false;
+
+      allow create: if isBootstrap(h)
+        && exactKeys(['name', 'createdBy', 'updatedBy', 'currency', 'timezone', 'language',
+                      'schemaVersion', 'createdAt', 'updatedAt'])
+        && incoming().createdBy == request.auth.uid
+        && incoming().updatedBy == request.auth.uid
+        && isName(incoming().name, 80)
+        && isCurrency(incoming().currency)
+        && isTimezone(incoming().timezone)
+        && isLanguage(incoming().language)
+        && incoming().schemaVersion == 1
+        && stampedNow('createdAt') && stampedNow('updatedAt');
+
+      // createdBy, createdAt and schemaVersion are immutable.
+      allow update: if can(h, 'home', 'edit')
+        && changed().hasOnly(['name', 'currency', 'timezone', 'language', 'updatedBy', 'updatedAt'])
+        && isName(incoming().name, 80)
+        && isCurrency(incoming().currency)
+        && isTimezone(incoming().timezone)
+        && isLanguage(incoming().language)
+        && incoming().updatedBy == request.auth.uid
+        && stampedNow('updatedAt');
+
+      allow delete: if false;   // Home deletion is not part of Phase 1.
+
+      // --------------------------------------------------------- members/{u}
+      match /members/{u} {
+        // A user can always read their OWN membership (even inactive) so the app can
+        // explain why access is paused. Reading others requires members.view.
+        allow get: if isSelf(u) || can(h, 'members', 'view');
+        allow list: if can(h, 'members', 'view');
+
+        // Phase 1: the bootstrap owner membership. Phase 4A adds: joining by invitation.
+        // Phase 5.1.2: each path starts with its own key set (the three sets are disjoint), so a
+        // request belonging to one path leaves the others after one cheap check (1000-expression
+        // headroom). Reordering && conjuncts never widens access: all must still hold.
+        allow create: if // Phase 5.2.1: DISPATCH (branch texts unchanged; see SECURITY.md)
+          ('legacyAdoption' in incoming()
+            ? (exactKeys(['uid', 'email', 'displayName', 'roleId', 'status', 'addedBy', 'joinedAt',
+                          'createdAt', 'updatedAt', 'legacyAdoption'])
+            && incoming().legacyAdoption == true
+            && isSelf(u) && isLegacyAdoption(h)
+            && incoming().uid == u
+            && incoming().roleId == 'owner'
+            && incoming().status == 'active'
+            && incoming().addedBy == request.auth.uid
+            && incoming().legacyAdoption == true
+            && isEmail(incoming().email)
+            && isName(incoming().displayName, 60)
+            && stampedNow('joinedAt') && stampedNow('createdAt') && stampedNow('updatedAt'))
+            : ('inviteCode' in incoming()
+                ? (exactKeys(['uid', 'email', 'displayName', 'roleId', 'status', 'addedBy', 'joinedAt', 'createdAt',
+                      'updatedAt', 'relationship', 'guardianUids', 'inviteCode'])
+            && incoming().uid == u
+            && isEmail(incoming().email)
+            && stampedNow('createdAt')
+            && joinsByInvite(h, u, incoming())                       // proves the invite exists first
+            && incoming().addedBy == inv(incoming().inviteCode).createdBy)
+                : (exactKeys(['uid', 'email', 'displayName', 'roleId', 'status', 'addedBy',
+                        'joinedAt', 'createdAt', 'updatedAt'])
+          && isSelf(u)
+          && isBootstrap(h)
+          && incoming().uid == u
+          && incoming().roleId == 'owner'
+          && incoming().status == 'active'
+          && incoming().addedBy == request.auth.uid
+          && isEmail(incoming().email)
+          && isName(incoming().displayName, 60)
+          && stampedNow('joinedAt') && stampedNow('createdAt') && stampedNow('updatedAt'))));
+
+        // (a) Self: an active member may change only their own displayName.
+        // (b) Manager: members.edit may change another member's roleId/status, but only
+        //     for members ranked BELOW them and only to roles ranked BELOW them (the owner
+        //     may manage anyone except themselves). Nobody can change their own role or
+        //     status, and nobody can grant or remove the owner role here.
+        // Phase 5.2.1: DISPATCH between the six paths (branch texts unchanged). Each test below is
+        // implied by exactly one path's own conditions; ambiguous cases keep the original ||.
+        allow update: if
+          resource.data.status in ['removed', 'left']
+            ? (resource.data.status in ['removed', 'left']
+            && changed().hasOnly(['roleId', 'status', 'relationship', 'guardianUids', 'inviteCode', 'joinedAt',
+                                  'updatedAt', 'displayName'])
+            && joinsByInvite(h, u, incoming()))
+            : (incoming().status == 'removed'
+                ? (incoming().status == 'removed' && changed().hasOnly(['status', 'updatedAt'])
+            && !isSelf(u) && can(h, 'members', 'remove') && stampedNow('updatedAt')
+            && resource.data.status in ['active', 'suspended']
+            && resource.data.roleId != 'owner'
+            && (isOwner(h) || rankOf(h, resource.data.roleId) < myRank(h)))
+                : (incoming().status == 'left'
+                    ? (incoming().status == 'left' && changed().hasOnly(['status', 'updatedAt'])
+            && isSelf(u) && isActiveMember(h) && resource.data.roleId != 'owner' && stampedNow('updatedAt'))
+                    : (incoming().status != resource.data.status
+                        ? (changed().hasOnly(['roleId', 'status', 'updatedAt'])
+            && !isSelf(u) && can(h, 'members', 'edit')
+            && stampedNow('updatedAt')
+            && incoming().status in ['active', 'suspended']
+            && resource.data.status in ['active', 'suspended']
+            && resource.data.roleId != 'owner'
+            && incoming().roleId != 'owner'
+            && exists(roleDoc(h, incoming().roleId))
+            && (isOwner(h)
+                || (rankOf(h, resource.data.roleId) < myRank(h)
+                    && rankOf(h, incoming().roleId) < myRank(h))))
+                        : ('guardianUids' in changed()
+                            ? (changed().hasOnly(['guardianUids', 'updatedAt'])
+            && !isSelf(u) && can(h, 'members', 'manageChildren') && stampedNow('updatedAt')
+            && (resource.data.relationship == 'child' || resource.data.roleId == 'child')
+            && resource.data.status in ['active', 'suspended']
+            && guardiansOk(h, incoming().guardianUids, u))
+                            : ('roleId' in changed()
+                                ? (changed().hasOnly(['roleId', 'status', 'updatedAt'])
+            && !isSelf(u) && can(h, 'members', 'edit')
+            && stampedNow('updatedAt')
+            && incoming().status in ['active', 'suspended']
+            && resource.data.status in ['active', 'suspended']
+            && resource.data.roleId != 'owner'
+            && incoming().roleId != 'owner'
+            && exists(roleDoc(h, incoming().roleId))
+            && (isOwner(h)
+                || (rankOf(h, resource.data.roleId) < myRank(h)
+                    && rankOf(h, incoming().roleId) < myRank(h))))
+                                : ('displayName' in changed()
+                                    ? (changed().hasOnly(['displayName', 'updatedAt'])
+            && isSelf(u) && isActiveMember(h)
+            && isName(incoming().displayName, 60)
+            && stampedNow('updatedAt'))
+                                    : ((changed().hasOnly(['displayName', 'updatedAt'])
+            && isSelf(u) && isActiveMember(h)
+            && isName(incoming().displayName, 60)
+            && stampedNow('updatedAt')) || (changed().hasOnly(['roleId', 'status', 'updatedAt'])
+            && !isSelf(u) && can(h, 'members', 'edit')
+            && stampedNow('updatedAt')
+            && incoming().status in ['active', 'suspended']
+            && resource.data.status in ['active', 'suspended']
+            && resource.data.roleId != 'owner'
+            && incoming().roleId != 'owner'
+            && exists(roleDoc(h, incoming().roleId))
+            && (isOwner(h)
+                || (rankOf(h, resource.data.roleId) < myRank(h)
+                    && rankOf(h, incoming().roleId) < myRank(h)))) || (changed().hasOnly(['guardianUids', 'updatedAt'])
+            && !isSelf(u) && can(h, 'members', 'manageChildren') && stampedNow('updatedAt')
+            && (resource.data.relationship == 'child' || resource.data.roleId == 'child')
+            && resource.data.status in ['active', 'suspended']
+            && guardiansOk(h, incoming().guardianUids, u)))))))));
+
+        allow delete: if false;   // Removal is a status change (history and attribution survive).
+      }
+
+      // --------------------------------------------------------- roles/{r}
+      match /roles/{r} {
+        allow get: if (isActiveMember(h) && (myMember(h).roleId == r || can(h, 'roles', 'view')))
+          || isUnadoptedCreator(h);   // Phase 5.1: per-id detection of partial states (no list)
+        allow list: if can(h, 'roles', 'view');
+
+        // Phase 1: roles are only created by the bootstrap seed (system roles).
+        // The owner role must hold exactly ["*"] at rank 100; every other role ranks lower.
+        allow create: if (isBootstrap(h)
+            // Phase 5.1: only MISSING system roles, current template, never "*" outside owner.
+            || (isLegacyAdoptionCompanion(h) && incoming().templateVersion == adoptionTemplateVersion()
+                && (r == 'owner' || !('*' in incoming().permissions))))
+          && r in systemRoleIds()
+          && exactKeys(['name', 'rank', 'permissions', 'system', 'templateVersion',
+                        'createdAt', 'updatedAt'])
+          && isName(incoming().name, 40)
+          && incoming().rank is int
+          && incoming().permissions is list && incoming().permissions.size() <= 200
+          && incoming().system == true
+          && incoming().templateVersion is int
+          && stampedNow('createdAt') && stampedNow('updatedAt')
+          && (r == 'owner'
+                ? (incoming().permissions == ['*'] && incoming().rank == 100)
+                : (incoming().rank >= 0 && incoming().rank < 100));
+
+        // roles.edit may change names/permissions of roles ranked BELOW the caller (owner:
+        // any role). Rank and system flag are immutable. Only the owner may hand out "*",
+        // and the owner role itself always stays ["*"].
+        allow update: if can(h, 'roles', 'edit')
+          && changed().hasOnly(['name', 'permissions', 'templateVersion', 'updatedAt'])
+          && isName(incoming().name, 40)
+          && incoming().permissions is list && incoming().permissions.size() <= 200
+          && incoming().templateVersion is int
+          && stampedNow('updatedAt')
+          && (r == 'owner'
+                ? incoming().permissions == ['*']
+                : (isOwner(h) || (resource.data.rank < myRank(h) && !('*' in incoming().permissions))));
+
+        allow delete: if false;
+      }
+
+      // --------------------------------------------------------- settings/{s}
+      // Home-scoped settings. Phase 1 defines only "general"; future modules add their own
+      // settings documents (e.g. settings/expenses) together with their rules.
+      match /settings/{s} {
+        allow get: if isActiveMember(h);
+        allow list: if isActiveMember(h);
+
+        allow create: if s == 'general'
+          && isBootstrap(h)
+          && exactKeys(['weekStartsOn', 'schemaVersion', 'updatedBy', 'createdAt', 'updatedAt'])
+          && isWeekday(incoming().weekStartsOn)
+          && incoming().schemaVersion == 1
+          && incoming().updatedBy == request.auth.uid
+          && stampedNow('createdAt') && stampedNow('updatedAt');
+
+        allow update: if s == 'general'
+          && can(h, 'home', 'edit')
+          && changed().hasOnly(['weekStartsOn', 'updatedBy', 'updatedAt'])
+          && isWeekday(incoming().weekStartsOn)
+          && incoming().updatedBy == request.auth.uid
+          && stampedNow('updatedAt');
+
+        allow delete: if false;
+      }
+
+      // --------------------------------------------------------- rooms/{roomId}  (Phase 2)
+      // Rooms are never hard-deleted: future devices, cleaning and maintenance records keep
+      // pointing at roomId, so "delete" is a soft archive (active=false). Each kind of
+      // update is a separate, narrowly-shaped path with its own permission.
+      match /rooms/{roomId} {
+        allow get, list: if can(h, 'rooms', 'view');
+
+        allow create: if can(h, 'rooms', 'create')
+          && exactKeys(['name', 'type', 'icon', 'floor', 'notes', 'sortOrder', 'active',
+                        'archivedAt', 'archivedBy', 'createdBy', 'createdAt', 'updatedBy',
+                        'updatedAt', 'schemaVersion'])
+          && validRoomContent(incoming())
+          && incoming().active == true
+          && incoming().archivedAt == null
+          && incoming().archivedBy == null
+          && incoming().createdBy == request.auth.uid
+          && stampedNow('createdAt')
+          && stampedBy()
+          && incoming().schemaVersion == 1;
+
+        allow update: if
+          // Edit content / reorder (active rooms only). createdBy, createdAt, active,
+          // archive fields and schemaVersion cannot change on this path.
+          (can(h, 'rooms', 'edit')
+            && resource.data.active == true
+            && changed().hasOnly(['name', 'type', 'icon', 'floor', 'notes', 'sortOrder',
+                                  'updatedBy', 'updatedAt'])
+            && validRoomContent(incoming())
+            && stampedBy())
+          ||
+          // Archive (soft delete).
+          (can(h, 'rooms', 'delete')
+            && resource.data.active == true
+            && changed().hasOnly(['active', 'archivedAt', 'archivedBy', 'updatedBy', 'updatedAt'])
+            && incoming().active == false
+            && incoming().archivedAt == request.time
+            && incoming().archivedBy == request.auth.uid
+            && stampedBy())
+          ||
+          // Restore (may move the room to the end of the list).
+          (can(h, 'rooms', 'restore')
+            && resource.data.active == false
+            && changed().hasOnly(['active', 'archivedAt', 'archivedBy', 'sortOrder',
+                                  'updatedBy', 'updatedAt'])
+            && incoming().active == true
+            && incoming().archivedAt == null
+            && incoming().archivedBy == null
+            && incoming().sortOrder is int && incoming().sortOrder >= 0
+            && incoming().sortOrder <= 1000000000
+            && stampedBy());
+
+        allow delete: if false;
+      }
+
+      // --------------------------------------------------------- devices/{deviceId}  (Phase 3)
+      // Devices are Home-level entities that reference a room by roomId (or null =
+      // Unassigned). Never hard-deleted: "delete" = archive (active=false).
+      // Room assignment: a NEW assignment (create, or roomId changed) must target an
+      // existing ACTIVE room of this home. An UNCHANGED roomId stays valid even if that
+      // room was archived later, so unrelated edits keep working.
+      match /devices/{deviceId} {
+        allow get, list: if can(h, 'devices', 'view');
+
+        allow create: if can(h, 'devices', 'create')
+          && exactKeys(['name', 'category', 'subtype', 'roomId', 'status', 'icon', 'brand', 'model',
+                        'serialNumber', 'purchaseDate', 'installationDate', 'purchasePrice',
+                        'currency', 'warrantyExpiry', 'notes', 'active', 'archivedAt', 'archivedBy',
+                        'createdBy', 'createdAt', 'updatedBy', 'updatedAt', 'schemaVersion'])
+          && validDeviceContent(incoming())
+          && (incoming().roomId == null || isActiveRoom(h, incoming().roomId))
+          && incoming().active == true
+          && incoming().archivedAt == null
+          && incoming().archivedBy == null
+          && incoming().createdBy == request.auth.uid
+          && stampedNow('createdAt')
+          && stampedBy()
+          && incoming().schemaVersion == 1;
+
+        allow update: if // Phase 5.2.1: DISPATCH (branch texts unchanged; see SECURITY.md)
+          (incoming().active != resource.data.active
+            ? (resource.data.active == true ? (resource.data.active == true && incoming().active == false
+            && changed().hasOnly(['active', 'archivedAt', 'archivedBy', 'updatedBy', 'updatedAt'])
+            && can(h, 'devices', 'delete')
+            && incoming().archivedAt == request.time
+            && incoming().archivedBy == request.auth.uid
+            && stampedBy()) : (resource.data.active == false && incoming().active == true
+            && changed().hasOnly(['active', 'archivedAt', 'archivedBy', 'updatedBy', 'updatedAt'])
+            && can(h, 'devices', 'restore')
+            && incoming().archivedAt == null
+            && incoming().archivedBy == null
+            && stampedBy()))
+            : (resource.data.active == true
+            && changed().hasOnly(['name', 'category', 'subtype', 'roomId', 'status', 'icon', 'brand',
+                                  'model', 'serialNumber', 'purchaseDate', 'installationDate',
+                                  'purchasePrice', 'currency', 'warrantyExpiry', 'notes',
+                                  'updatedBy', 'updatedAt'])
+            && can(h, 'devices', 'edit')
+            && validDeviceContent(incoming())
+            && (!('roomId' in changed()) || incoming().roomId == null || isActiveRoom(h, incoming().roomId))
+            && stampedBy()));
+
+        allow delete: if false;
+      }
+
+      // =================================================== FINANCE (Phase 4)
+      // Expenses = money spent. walletMovements = funding / transfer / adjustment (never
+      // spending). commitments = scheduled obligations (not expenses until paid).
+      // spendingCycles = rolling N-day budgets on one wallet. Nothing is ever hard-deleted.
+
+      // --------------------------------------------------------- wallets/{walletId}
+      match /wallets/{walletId} {
+        allow get, list: if isActiveMember(h)   // query-safe (Phase 5.1.2)
+          && ((resource.data.get('visibility', '') == 'household' && can(h, 'expenses', 'view'))
+              || request.auth.uid in resource.data.readers);
+
+        allow create: if keysOpt(['name', 'type', 'scope', 'ownerUid', 'visibility', 'sharedWith', 'readers',
+                                    'currency', 'active', 'archivedAt', 'archivedBy', 'createdBy', 'createdAt',
+                                    'updatedBy', 'updatedAt', 'schemaVersion'], ['role', 'openingDate'])
+          // V6 accounts: optional role + opening date, set at creation only (the update lists exclude them → immutable).
+          && (!('role' in incoming()) || incoming().role in ['bank', 'cash', 'other'])
+          && (!('openingDate' in incoming()) || (incoming().openingDate is string && isOptionalDate(incoming().openingDate)))
+          && isName(incoming().name, 60)
+          && incoming().type in walletTypes()
+          && isCurrency(incoming().currency)
+          && incoming().active == true && incoming().archivedAt == null && incoming().archivedBy == null
+          && incoming().createdBy == request.auth.uid && stampedNow('createdAt') && stampedBy()
+          && incoming().schemaVersion == 1
+          && // Phase 5.2.1: DISPATCH (branch texts unchanged)
+          (incoming().scope == 'home' ? (incoming().scope == 'home' && can(h, 'expenses', 'manageWallets')
+              && incoming().visibility == 'household' && incoming().ownerUid == null
+              && incoming().sharedWith == [] && incoming().readers == []) : (incoming().scope == 'personal'
+              && incoming().visibility in ['private', 'shared']
+              && incoming().ownerUid is string && exists(memberDoc(h, incoming().ownerUid))
+              && ((incoming().ownerUid == request.auth.uid && can(h, 'expenses', 'personal'))
+                  || can(h, 'expenses', 'manageWallets'))
+              && membersOf(h, incoming().sharedWith)
+              && !(incoming().ownerUid in incoming().sharedWith)
+              && (incoming().visibility == 'private' ? incoming().sharedWith == [] : incoming().sharedWith.size() > 0)
+              && incoming().readers.toSet() == [incoming().ownerUid].concat(incoming().sharedWith).toSet()))
+          ;
+
+        allow update: if stampedBy()
+          && !('scope' in changed()) && !('ownerUid' in changed()) && !('currency' in changed())
+          && // Phase 5.2.1: DISPATCH (branch texts unchanged)
+          (resource.data.scope == 'home' ? (resource.data.scope == 'home' && can(h, 'expenses', 'manageWallets')
+              && changed().hasOnly(['name', 'type', 'active', 'archivedAt', 'archivedBy', 'correctionSeq', 'updatedBy', 'updatedAt'])
+              && isName(incoming().name, 60) && incoming().type in walletTypes()
+              && archiveFieldsOk() && corrSeqOk(h, walletId)
+              // V6.2.2: the Home's required Cash / Bank account is never archived ("deleted")
+              && !(incoming().active == false && resource.data.active == true && resource.data.get('role', null) in ['cash', 'bank'])) : (resource.data.scope == 'personal'
+              && (request.auth.uid == resource.data.createdBy
+                  || (request.auth.uid == resource.data.ownerUid
+                      && get(memberDoc(h, request.auth.uid)).data.roleId != 'child'
+                      && get(memberDoc(h, request.auth.uid)).data.get('relationship', 'adult') != 'child'))
+              && can(h, 'expenses', 'personal')
+              && changed().hasOnly(['name', 'type', 'visibility', 'sharedWith', 'readers', 'active', 'archivedAt',
+                                    'archivedBy', 'correctionSeq', 'updatedBy', 'updatedAt']) && corrSeqOk(h, walletId)
+              && isName(incoming().name, 60) && incoming().type in walletTypes()
+              && incoming().visibility in ['private', 'shared']
+              && membersOf(h, incoming().sharedWith)
+              && !(incoming().ownerUid in incoming().sharedWith)
+              && (incoming().visibility == 'private' ? incoming().sharedWith == [] : incoming().sharedWith.size() > 0)
+              && incoming().readers.toSet() == [incoming().ownerUid].concat(incoming().sharedWith).toSet()
+              && archiveFieldsOk()))
+          ;
+        allow delete: if false;
+      }
+
+      // --------------------------------------------------------- expenses/{expenseId}
+      match /expenses/{expenseId} {
+        allow get, list: if canReadFinance(h, resource.data);
+
+        allow create: if expenseContentOk(incoming())
+          && incoming().status == 'active' && incoming().voidedAt == null && incoming().voidedBy == null && incoming().voidReason == null
+          && incoming().createdBy == request.auth.uid && stampedNow('createdAt') && stampedBy()
+          && incoming().schemaVersion == 1
+          && // Phase 5.2.1: DISPATCH (branch texts unchanged)
+          (incoming().source == 'app' ? (incoming().source == 'app'
+              && keysOpt(['amountMinor', 'currency', 'date', 'category', 'note', 'merchant', 'paymentMethod', 'walletId',
+                            'budgetCycleId', 'paidBy', 'commitmentId', 'commitmentDueDate', 'audience', 'readers', 'status',
+                            'voidedAt', 'voidedBy', 'voidReason', 'source', 'createdBy', 'createdAt', 'updatedBy',
+                            'updatedAt', 'schemaVersion'], ['periodId', 'lateEntry'])
+              && v6ExpenseOk(h, incoming())
+              && incoming().amountMinor > 0
+              && incoming().paymentMethod != 'visa'
+              && expenseWalletOk(h, incoming(), 'create')
+              && cycleLinkOk(h, incoming())
+              && (incoming().commitmentId == null
+                  ? incoming().commitmentDueDate == null
+                  : (expenseId == payExpenseId(incoming().commitmentId, incoming().commitmentDueDate)
+                     && existsAfter(commitmentPath(h, incoming().commitmentId))
+                     && getAfter(commitmentPath(h, incoming().commitmentId)).data.nextDueDate > incoming().commitmentDueDate))) : (incoming().source == 'import'
+              && exactKeys(['amountMinor', 'currency', 'date', 'category', 'note', 'merchant', 'paymentMethod', 'walletId',
+                            'budgetCycleId', 'paidBy', 'commitmentId', 'commitmentDueDate', 'audience', 'readers', 'status',
+                            'voidedAt', 'voidedBy', 'voidReason', 'source', 'createdBy', 'createdAt', 'updatedBy',
+                            'updatedAt', 'schemaVersion', 'importedCategory', 'importBatchId', 'originalRow'])
+              && can(h, 'expenses', 'import')
+              && incoming().walletId == null && incoming().budgetCycleId == null && incoming().commitmentId == null
+              && access0(incoming())
+              && isOptionalText(incoming().importedCategory, 200)
+              && incoming().importBatchId is string && incoming().importBatchId.size() <= 64
+              && incoming().originalRow is map && incoming().originalRow.size() <= 40))
+          ;
+
+        allow update: if stampedBy()
+          && !('createdBy' in changed()) && !('createdAt' in changed()) && !('schemaVersion' in changed())
+          && !('source' in changed()) && !('originalRow' in changed()) && !('importBatchId' in changed())
+          && !('commitmentId' in changed()) && !('commitmentDueDate' in changed())
+          && // Phase 5.2.1: DISPATCH (branch texts unchanged)
+          (incoming().status != resource.data.status
+            ? (changed().hasOnly(['status', 'voidedAt', 'voidedBy', 'voidReason', 'updatedBy', 'updatedAt'])
+              && (incoming().status != 'void' || v6VoidOk(h, expenseId))   // V6: no void of zk_* / refunded expenses
+              && (incoming().walletId == null ? can(h, 'expenses', 'delete')
+                  : (walletExists(h, incoming().walletId) && mayUseWallet(h, walletAfter(h, incoming().walletId), 'delete')))
+              && ((resource.data.status == 'active' && incoming().status == 'void' && incoming().voidedAt == request.time
+                   && incoming().voidedBy == request.auth.uid && isOptionalText(incoming().voidReason, 200))
+                  || (resource.data.status == 'void' && incoming().status == 'active' && incoming().voidedAt == null
+                      && incoming().voidedBy == null && incoming().voidReason == null)))
+            : (changed().hasOnly(['audience', 'readers', 'updatedBy', 'updatedAt'])
+                ? ((changed().hasOnly(['audience', 'readers', 'updatedBy', 'updatedAt'])
+              && audienceShape(incoming()) && incoming().walletId != null
+              && walletExists(h, incoming().walletId)
+              && request.auth.uid in walletAfter(h, incoming().walletId).readers
+              && access1(h, incoming(), incoming().walletId)) || (resource.data.status == 'active'
+              && changed().hasOnly(['amountMinor', 'date', 'category', 'note', 'merchant', 'paymentMethod', 'walletId',
+                                    'budgetCycleId', 'paidBy', 'audience', 'readers', 'updatedBy', 'updatedAt'])
+              && expenseContentOk(incoming())   // (this arm only sees audience / readers changes: no V6 money / period fields)
+              && (!('amountMinor' in changed()) || incoming().amountMinor > 0)
+              && (resource.data.walletId == incoming().walletId
+                    ? expenseWalletOk(h, incoming(), 'edit')   // same wallet: this check contains the old-wallet check
+                    : ((resource.data.walletId == null ? can(h, 'expenses', 'edit')
+                        : (walletExists(h, resource.data.walletId) && mayUseWallet(h, walletAfter(h, resource.data.walletId), 'edit')))
+                       && expenseWalletOk(h, incoming(), 'edit')))
+              && cycleLinkOk(h, incoming())))
+                : (resource.data.status == 'active'
+              && changed().hasOnly(['amountMinor', 'date', 'category', 'note', 'merchant', 'paymentMethod', 'walletId',
+                                    'budgetCycleId', 'paidBy', 'audience', 'readers', 'updatedBy', 'updatedAt', 'periodId', 'lateEntry'])
+              && expenseContentOk(incoming()) && v6ExpenseEditOk(h, incoming()) && v6MoneyLockOk(h, expenseId)
+              && (!('amountMinor' in changed()) || incoming().amountMinor > 0)
+              && (resource.data.walletId == incoming().walletId
+                    ? expenseWalletOk(h, incoming(), 'edit')   // same wallet: this check contains the old-wallet check
+                    : ((resource.data.walletId == null ? can(h, 'expenses', 'edit')
+                        : (walletExists(h, resource.data.walletId) && mayUseWallet(h, walletAfter(h, resource.data.walletId), 'edit')))
+                       && expenseWalletOk(h, incoming(), 'edit')))
+              && cycleLinkOk(h, incoming()))))
+          ;
+        allow delete: if false;
+      }
+
+      // --------------------------------------------------------- walletMovements/{movementId}
+      // funding (outside → wallet), transfer (wallet → wallet, same currency), adjustment (±, cash
+      // reconciliation). Never counted as spending or income.
+      match /walletMovements/{movementId} {
+        allow get, list: if canReadFinance(h, resource.data);
+
+        // Phase 5.2.1: dispatch on `type` (mutually exclusive) and bind each wallet once — a denial
+        // evaluates one branch instead of all four.
+        allow create: if exactKeys(['type', 'amountMinor', 'currency', 'date', 'fromWalletId', 'toWalletId', 'cycleId', 'note',
+                           'audience', 'readers', 'status', 'voidedAt', 'voidedBy', 'createdBy', 'createdAt',
+                           'updatedBy', 'updatedAt', 'schemaVersion'].concat(mvExtraKeys(incoming().type)))
+          && isMoney(incoming().amountMinor) && incoming().amountMinor > 0
+          && isCurrency(incoming().currency) && incoming().date is string && isOptionalDate(incoming().date)
+          && isOptionalId(incoming().fromWalletId) && isOptionalId(incoming().toWalletId) && isOptionalId(incoming().cycleId)
+          && isOptionalText(incoming().note, 200) && audienceShape(incoming())
+          && incoming().status == 'active' && incoming().voidedAt == null && incoming().voidedBy == null
+          && incoming().createdBy == request.auth.uid && stampedNow('createdAt') && stampedBy() && incoming().schemaVersion == 1
+          && (incoming().type == 'funding' ? mvFundingOk(h, incoming())
+              : (incoming().type == 'transfer' ? mvTransferOk(h, incoming())
+                 : (incoming().type == 'savings' ? mvSavingsOk(h, movementId, incoming())
+                    : (incoming().type == 'adjustment' ? mvAdjustmentOk(h, incoming())
+                       : (incoming().type == 'opening' ? mvOpeningOk(h, movementId, incoming())          // V6
+                          : (incoming().type == 'income' ? mvIncomeOk(h, incoming())                     // V6
+                             : (incoming().type == 'refund' ? mvRefundOk(h, movementId, incoming())      // V6
+                                : (incoming().type == 'reconciliation' ? mvReconOk(h, movementId, incoming()) : false))))))))
+          && (incoming().cycleId == null
+              || (existsAfter(/databases/$(database)/documents/homes/$(h)/spendingCycles/$(incoming().cycleId))
+                  && getAfter(/databases/$(database)/documents/homes/$(h)/spendingCycles/$(incoming().cycleId)).data.walletId
+                     in [incoming().fromWalletId, incoming().toWalletId]));
+
+
+        // Phase 5.2.1: void (status changes) vs privacy re-label (status unchanged) are exclusive.
+        allow update: if stampedBy()
+          && (incoming().status != resource.data.status
+              ? (resource.data.type in ['savings', 'opening', 'reconciliation'] ? false   // V6: never voided alone (savings: via Savings; V6.2.2 corrections are append-only — correct again instead)
+                : (resource.data.type == 'refund'
+                  ? (changed().hasOnly(['status', 'voidedAt', 'voidedBy', 'voidReason', 'updatedBy', 'updatedAt'])
+                      && resource.data.status == 'active' && incoming().status == 'void'
+                      && incoming().voidedAt == request.time && incoming().voidedBy == request.auth.uid
+                      && mvRefundVoidOk(h, resource.data))
+                  : (changed().hasOnly(['status', 'voidedAt', 'voidedBy', 'updatedBy', 'updatedAt'])
+                  && resource.data.status == 'active' && incoming().status == 'void'
+                  && incoming().voidedAt == request.time && incoming().voidedBy == request.auth.uid
+                  && (resource.data.toWalletId == null || mayUseWallet(h, walletAfter(h, resource.data.toWalletId), 'transfer'))
+                  && (resource.data.fromWalletId == null || mayUseWallet(h, walletAfter(h, resource.data.fromWalletId), 'transfer')))))
+              : (changed().hasOnly(['audience', 'readers', 'updatedBy', 'updatedAt']) && audienceShape(incoming())
+                  && request.auth.uid in incoming().readers.concat(resource.data.readers)
+                  && (resource.data.fromWalletId == null || resource.data.toWalletId == null
+                        ? access1(h, incoming(), resource.data.fromWalletId == null ? resource.data.toWalletId : resource.data.fromWalletId)
+                        : access2(h, incoming(), resource.data.fromWalletId, resource.data.toWalletId))));
+        allow delete: if false;
+      }
+
+      // =================================================== V6 FINANCE (batch 1)
+      // Refund ledger: counters live here (not on the expense) — every change proven against its refund.
+      match /refundLedgers/{expenseId} {
+        allow get: if canReadFinance(h, get(v6Path(h, 'expenses', expenseId)).data);
+        allow create: if exactKeys(['refundSeq', 'refundedMinor', 'rev', 'updatedBy', 'updatedAt', 'schemaVersion'])
+          && incoming().refundSeq == 1 && incoming().rev == 1 && stampedBy() && incoming().schemaVersion == 1
+          && rlRefundOk(h, expenseId, 1, 0);
+        allow update: if exactKeys(['refundSeq', 'refundedMinor', 'rev', 'updatedBy', 'updatedAt', 'schemaVersion'])
+          && stampedBy() && incoming().schemaVersion == 1 && incoming().rev == resource.data.rev + 1
+          && (incoming().refundSeq == resource.data.refundSeq + 1
+                ? rlRefundOk(h, expenseId, incoming().refundSeq, resource.data.refundedMinor)
+                : (incoming().refundSeq == resource.data.refundSeq && rlVoidOk(h, expenseId, resource.data)));
+        allow delete: if false;
+      }
+      // Household budget periods: half-open [start, endExclusive), immutable dates, created only via the head.
+      match /budgetPeriods/{periodId} {
+        allow get, list: if canReadFinance(h, resource.data);
+        allow create: if exactKeys(['startDate', 'endDateExclusive', 'capMinor', 'audience', 'readers', 'status', 'closingSnapshot', 'rev',
+                                    'createdBy', 'createdAt', 'updatedBy', 'updatedAt', 'schemaVersion'])
+          && incoming().audience == 'household' && incoming().readers == []
+          && incoming().startDate is string && isOptionalDate(incoming().startDate)
+          && incoming().endDateExclusive is string && isOptionalDate(incoming().endDateExclusive)
+          && incoming().endDateExclusive > incoming().startDate
+          && periodId == 'p_' + incoming().startDate.replace('-', '')
+          && isMoney(incoming().capMinor) && incoming().status == 'open' && incoming().closingSnapshot == null && incoming().rev == 1
+          && incoming().createdBy == request.auth.uid && stampedNow('createdAt') && stampedBy() && incoming().schemaVersion == 1
+          && budgetAdmin(h) && bhNextOk(h, periodId, incoming());
+        // Dates immutable. Either an AUDITED cap edit (batch 2) or a close after the period ended.
+        allow update: if stampedBy() && incoming().rev == resource.data.rev + 1 && resource.data.status == 'open'
+          && budgetAdmin(h)
+          && ('capMinor' in changed()
+            ? (changed().hasOnly(['capMinor', 'rev', 'updatedBy', 'updatedAt']) && isMoney(incoming().capMinor)
+               && capChangeOk(getAfter(v6Path(h, 'budgetCapChanges', periodId + '_r' + string(incoming().rev))).data, resource.data, incoming()))
+            : (changed().hasOnly(['status', 'closingSnapshot', 'rev', 'updatedBy', 'updatedAt'])
+          && incoming().status == 'closed'
+          && request.time >= cleanDayTs(resource.data.endDateExclusive) + duration.value(12, 'h')
+          && incoming().closingSnapshot is map && incoming().closingSnapshot.keys().hasOnly(['capMinor', 'spentMinor', 'remainingMinor'])
+          && incoming().closingSnapshot.capMinor == resource.data.capMinor
+          && incoming().closingSnapshot.spentMinor is int && incoming().closingSnapshot.remainingMinor is int));
+        allow delete: if false;
+      }
+      // Batch 2: audited cap edits — create-only, written in the same batch as the period's cap change.
+      match /budgetCapChanges/{changeId} {
+        allow get, list: if canReadFinance(h, resource.data);
+        allow create: if exactKeys(['periodId', 'rev', 'fromMinor', 'toMinor', 'reason', 'audience', 'readers', 'actorUid', 'at', 'schemaVersion'])
+          && incoming().audience == 'household' && incoming().readers == [] && incoming().schemaVersion == 1
+          && incoming().actorUid == request.auth.uid && incoming().at == request.time && isName(incoming().reason, 200)
+          && incoming().periodId is string && incoming().rev is int && changeId == incoming().periodId + '_r' + string(incoming().rev)
+          && isMoney(incoming().fromMinor) && isMoney(incoming().toMinor) && incoming().fromMinor != incoming().toMinor
+          && getAfter(v6Path(h, 'budgetPeriods', incoming().periodId)).data.rev == incoming().rev
+          && getAfter(v6Path(h, 'budgetPeriods', incoming().periodId)).data.capMinor == incoming().toMinor
+          && get(v6Path(h, 'budgetPeriods', incoming().periodId)).data.capMinor == incoming().fromMinor
+          && get(v6Path(h, 'budgetPeriods', incoming().periodId)).data.status == 'open'
+          && budgetAdmin(h);
+        allow update, delete: if false;
+      }
+      match /budgetHead/{headId} {
+        allow get, list: if canReadFinance(h, resource.data);
+        allow create: if headId == 'primary' && exactKeys(['lastPeriodId', 'endDateExclusive', 'audience', 'readers', 'rev', 'updatedBy', 'updatedAt'])
+          && incoming().audience == 'household' && incoming().readers == []
+          && incoming().rev == 1 && stampedBy() && budgetAdmin(h)
+          && !exists(v6Path(h, 'budgetPeriods', incoming().lastPeriodId)) && existsAfter(v6Path(h, 'budgetPeriods', incoming().lastPeriodId));
+        allow update: if exactKeys(['lastPeriodId', 'endDateExclusive', 'audience', 'readers', 'rev', 'updatedBy', 'updatedAt'])
+          && incoming().audience == 'household' && incoming().readers == []
+          && incoming().rev == resource.data.rev + 1 && stampedBy() && budgetAdmin(h)
+          && !exists(v6Path(h, 'budgetPeriods', incoming().lastPeriodId)) && existsAfter(v6Path(h, 'budgetPeriods', incoming().lastPeriodId));
+        allow delete: if false;
+      }
+
+      // --------------------------------------------------------- spendingCycles/{cycleId}
+      match /spendingCycles/{cycleId} {
+        allow get, list: if canReadFinance(h, resource.data);
+
+        allow create: if exactKeys(['walletId', 'currency', 'startDate', 'endDate', 'days', 'budgetMinor', 'carryInMinor',
+                                    'previousCycleId', 'status', 'closedAt', 'closedBy', 'closeOutcome', 'closingRemainingMinor',
+                                    'nextCycleId', 'audience', 'readers', 'createdBy', 'createdAt', 'updatedBy', 'updatedAt',
+                                    'schemaVersion'])
+          && walletExists(h, incoming().walletId)
+          && budgetWalletOk(h, walletAfter(h, incoming().walletId))
+          && walletAfter(h, incoming().walletId).currency == incoming().currency
+          && access1(h, incoming(), incoming().walletId)
+          && isOptionalDate(incoming().startDate) && isOptionalDate(incoming().endDate) && incoming().startDate is string
+          && incoming().endDate >= incoming().startDate
+          && incoming().days is int && incoming().days >= 1 && incoming().days <= 31
+          && isMoney(incoming().budgetMinor) && incoming().budgetMinor > 0 && isMoney(incoming().carryInMinor)
+          && isOptionalId(incoming().previousCycleId)
+          && incoming().status == 'active' && incoming().closedAt == null && incoming().closedBy == null
+          && incoming().closeOutcome == null && incoming().closingRemainingMinor == null && incoming().nextCycleId == null
+          && incoming().createdBy == request.auth.uid && stampedNow('createdAt') && stampedBy() && incoming().schemaVersion == 1;
+
+        // Phase 5.3: three EXCLUSIVE paths (dispatch). The old "adjust budget / end date / duration"
+        // path is replaced by an audited, AMOUNT-ONLY edit (dates and duration are now immutable).
+        allow update: if stampedBy()
+          && walletExists(h, resource.data.walletId)
+          && ('budgetRevision' in changed()
+            // Edit budget: amount only, active cycle, manageBudgets on its wallet, revision n → n+1,
+            // with the append-only adjustment record (old = STORED amount) in the same batch.
+            ? (resource.data.status == 'active'
+                && changed().hasOnly(['budgetMinor', 'budgetRevision', 'updatedBy', 'updatedAt'])
+                && isMoney(incoming().budgetMinor)
+                && incoming().budgetMinor != resource.data.budgetMinor
+                && incoming().budgetRevision == resource.data.get('budgetRevision', 0) + 1
+                && budgetWalletOk(h, walletAfter(h, resource.data.walletId))
+                && existsAfter(budgetAdjPath(h, cycleId + '_r' + string(incoming().budgetRevision))))
+            : ('status' in changed()
+              // Close (carry forward / return / keep). Remaining balance is recorded, never lost.
+              ? (resource.data.status == 'active'
+                  && budgetWalletOk(h, walletAfter(h, resource.data.walletId))
+                  && changed().hasOnly(['status', 'closedAt', 'closedBy', 'closeOutcome', 'closingRemainingMinor', 'nextCycleId',
+                                        'updatedBy', 'updatedAt'])
+                  && incoming().status == 'closed' && incoming().closedAt == request.time && incoming().closedBy == request.auth.uid
+                  && incoming().closeOutcome in ['carry', 'return', 'keep']
+                  && incoming().closingRemainingMinor is int
+                  && (incoming().closeOutcome != 'carry'
+                      || (incoming().nextCycleId is string
+                          && existsAfter(/databases/$(database)/documents/homes/$(h)/spendingCycles/$(incoming().nextCycleId)))))
+              // Access re-sync after wallet sharing changed.
+              : (changed().hasOnly(['audience', 'readers', 'updatedBy', 'updatedAt']) && audienceShape(incoming())
+                  && request.auth.uid in walletAfter(h, resource.data.walletId).readers
+                  && access1(h, incoming(), resource.data.walletId))));
+        allow delete: if false;
+      }
+
+      // --------------------------------------------------------- budgetAdjustments/{adjId}  (Phase 5.3)
+      // Append-only history of budget edits. Created ONLY in the batch that moves its cycle from
+      // revision n to n+1; every field is proven against the stored (pre-batch) and new cycle.
+      match /budgetAdjustments/{adjId} {
+        allow get, list: if canReadFinance(h, resource.data);
+        allow create: if exactKeys(['cycleId', 'walletId', 'revision', 'oldBudgetMinor', 'newBudgetMinor', 'deltaMinor',
+                                    'currency', 'reason', 'editorUid', 'createdAt', 'audience', 'readers', 'schemaVersion'])
+          && incoming().cycleId is string && incoming().revision is int && incoming().revision >= 1
+          && adjId == incoming().cycleId + '_r' + string(incoming().revision)
+          && exists(cyclePath(h, incoming().cycleId))
+          && budgetAdjOk(incoming(), get(cyclePath(h, incoming().cycleId)).data, getAfter(cyclePath(h, incoming().cycleId)).data);
+        allow update, delete: if false;
+      }
+
+      // --------------------------------------------------------- commitments/{commitmentId}
+      match /commitments/{commitmentId} {
+        allow get, list: if canReadFinance(h, resource.data);
+
+        allow create: if exactKeys(['name', 'amountMinor', 'currency', 'category', 'recurrence', 'anchorDay', 'nextDueDate',
+                                    'paymentMethod', 'walletId', 'notes', 'lastPaidDate', 'audience', 'readers', 'active',
+                                    'archivedAt', 'archivedBy', 'createdBy', 'createdAt', 'updatedBy', 'updatedAt', 'schemaVersion'])
+          && commitmentContentOk(incoming())
+          && (incoming().walletId == null
+                ? (can(h, 'expenses', 'manageCommitments') && access0(incoming()))
+                : (walletExists(h, incoming().walletId) && mayUseWallet(h, walletAfter(h, incoming().walletId), 'manageCommitments')
+                   && access1(h, incoming(), incoming().walletId) && walletAfter(h, incoming().walletId).currency == incoming().currency))
+          && incoming().lastPaidDate == null
+          && incoming().active == true && incoming().archivedAt == null && incoming().archivedBy == null
+          && incoming().createdBy == request.auth.uid && stampedNow('createdAt') && stampedBy() && incoming().schemaVersion == 1;
+
+        allow update: if stampedBy()
+          && !('createdBy' in changed()) && !('createdAt' in changed()) && !('schemaVersion' in changed())
+          && // Phase 5.2.1: DISPATCH (branch texts unchanged)
+          ('lastPaidDate' in changed()
+            ? (resource.data.active == true
+              && changed().hasOnly(['nextDueDate', 'lastPaidDate', 'updatedBy', 'updatedAt'])
+              && isOptionalDate(incoming().nextDueDate) && incoming().nextDueDate > resource.data.nextDueDate
+              && incoming().lastPaidDate is string && isOptionalDate(incoming().lastPaidDate)
+              && existsAfter(expensePath(h, payExpenseId(commitmentId, resource.data.nextDueDate)))
+              && !exists(expensePath(h, payExpenseId(commitmentId, resource.data.nextDueDate))))
+            : (changed().hasOnly(['audience', 'readers', 'updatedBy', 'updatedAt'])
+                ? ((changed().hasOnly(['audience', 'readers', 'updatedBy', 'updatedAt']) && audienceShape(incoming())
+              && resource.data.walletId != null && walletExists(h, resource.data.walletId)
+              && request.auth.uid in walletAfter(h, resource.data.walletId).readers
+              && access1(h, incoming(), resource.data.walletId)) || (changed().hasOnly(['name', 'amountMinor', 'category', 'recurrence', 'anchorDay', 'nextDueDate', 'paymentMethod',
+                                'walletId', 'notes', 'audience', 'readers', 'active', 'archivedAt', 'archivedBy',
+                                'updatedBy', 'updatedAt'])
+              && commitmentContentOk(incoming()) && archiveFieldsOk()
+              && (resource.data.walletId == incoming().walletId
+                    ? (incoming().walletId == null
+                    ? (can(h, 'expenses', 'manageCommitments') && access0(incoming()))
+                    : (walletExists(h, incoming().walletId)
+                       && mayUseWallet(h, walletAfter(h, incoming().walletId), 'manageCommitments')
+                       && access1(h, incoming(), incoming().walletId)
+                       && walletAfter(h, incoming().walletId).currency == incoming().currency))   // same wallet: contains the old-wallet check
+                    : ((resource.data.walletId == null ? can(h, 'expenses', 'manageCommitments')
+                        : (walletExists(h, resource.data.walletId) && mayUseWallet(h, walletAfter(h, resource.data.walletId), 'manageCommitments')))
+                       && (incoming().walletId == null
+                    ? (can(h, 'expenses', 'manageCommitments') && access0(incoming()))
+                    : (walletExists(h, incoming().walletId)
+                       && mayUseWallet(h, walletAfter(h, incoming().walletId), 'manageCommitments')
+                       && access1(h, incoming(), incoming().walletId)
+                       && walletAfter(h, incoming().walletId).currency == incoming().currency))))))
+                : (changed().hasOnly(['nextDueDate', 'lastPaidDate', 'updatedBy', 'updatedAt'])
+                    ? ((changed().hasOnly(['name', 'amountMinor', 'category', 'recurrence', 'anchorDay', 'nextDueDate', 'paymentMethod',
+                                'walletId', 'notes', 'audience', 'readers', 'active', 'archivedAt', 'archivedBy',
+                                'updatedBy', 'updatedAt'])
+              && commitmentContentOk(incoming()) && archiveFieldsOk()
+              && (resource.data.walletId == incoming().walletId
+                    ? (incoming().walletId == null
+                    ? (can(h, 'expenses', 'manageCommitments') && access0(incoming()))
+                    : (walletExists(h, incoming().walletId)
+                       && mayUseWallet(h, walletAfter(h, incoming().walletId), 'manageCommitments')
+                       && access1(h, incoming(), incoming().walletId)
+                       && walletAfter(h, incoming().walletId).currency == incoming().currency))   // same wallet: contains the old-wallet check
+                    : ((resource.data.walletId == null ? can(h, 'expenses', 'manageCommitments')
+                        : (walletExists(h, resource.data.walletId) && mayUseWallet(h, walletAfter(h, resource.data.walletId), 'manageCommitments')))
+                       && (incoming().walletId == null
+                    ? (can(h, 'expenses', 'manageCommitments') && access0(incoming()))
+                    : (walletExists(h, incoming().walletId)
+                       && mayUseWallet(h, walletAfter(h, incoming().walletId), 'manageCommitments')
+                       && access1(h, incoming(), incoming().walletId)
+                       && walletAfter(h, incoming().walletId).currency == incoming().currency))))) || (resource.data.active == true
+              && changed().hasOnly(['nextDueDate', 'lastPaidDate', 'updatedBy', 'updatedAt'])
+              && isOptionalDate(incoming().nextDueDate) && incoming().nextDueDate > resource.data.nextDueDate
+              && incoming().lastPaidDate is string && isOptionalDate(incoming().lastPaidDate)
+              && existsAfter(expensePath(h, payExpenseId(commitmentId, resource.data.nextDueDate)))
+              && !exists(expensePath(h, payExpenseId(commitmentId, resource.data.nextDueDate)))))
+                    : (changed().hasOnly(['name', 'amountMinor', 'category', 'recurrence', 'anchorDay', 'nextDueDate', 'paymentMethod',
+                                'walletId', 'notes', 'audience', 'readers', 'active', 'archivedAt', 'archivedBy',
+                                'updatedBy', 'updatedAt'])
+              && commitmentContentOk(incoming()) && archiveFieldsOk()
+              && (resource.data.walletId == incoming().walletId
+                    ? (incoming().walletId == null
+                    ? (can(h, 'expenses', 'manageCommitments') && access0(incoming()))
+                    : (walletExists(h, incoming().walletId)
+                       && mayUseWallet(h, walletAfter(h, incoming().walletId), 'manageCommitments')
+                       && access1(h, incoming(), incoming().walletId)
+                       && walletAfter(h, incoming().walletId).currency == incoming().currency))   // same wallet: contains the old-wallet check
+                    : ((resource.data.walletId == null ? can(h, 'expenses', 'manageCommitments')
+                        : (walletExists(h, resource.data.walletId) && mayUseWallet(h, walletAfter(h, resource.data.walletId), 'manageCommitments')))
+                       && (incoming().walletId == null
+                    ? (can(h, 'expenses', 'manageCommitments') && access0(incoming()))
+                    : (walletExists(h, incoming().walletId)
+                       && mayUseWallet(h, walletAfter(h, incoming().walletId), 'manageCommitments')
+                       && access1(h, incoming(), incoming().walletId)
+                       && walletAfter(h, incoming().walletId).currency == incoming().currency))))))))
+          ;
+        allow delete: if false;
+      }
+
+      // =================================================== LIFE SAVINGS + ZAKAT (Phase 5)
+      // What I own (assets) / quantity changes (events, append-only) / prices (append-only) /
+      // Zakat settings, calculation evidence and payments (append-only, per owner, private).
+      // The Home owner has NO implicit access to another adult's private savings or Zakat.
+
+      match /savingsAssets/{assetId} {
+        allow get, list: if isActiveMember(h)   // query-safe (Phase 5.1.2)
+          && ((resource.data.get('visibility', '') == 'household' && can(h, 'savings', 'view'))
+              || request.auth.uid in resource.data.readers);
+
+        allow create: if exactKeys(['name', 'type', 'scope', 'ownerUid', 'visibility', 'sharedWith', 'currency', 'purity',
+                                    'institution', 'notes', 'zakatTreatment', 'allocations', 'audience', 'readers', 'active',
+                                    'archivedAt', 'archivedBy', 'createdBy', 'createdAt', 'updatedBy', 'updatedAt', 'schemaVersion'])
+          && assetContentOk(incoming())
+          && incoming().active == true && incoming().archivedAt == null && incoming().archivedBy == null
+          && incoming().createdBy == request.auth.uid && stampedNow('createdAt') && stampedBy() && incoming().schemaVersion == 1
+          && // Phase 5.2.1: DISPATCH (branch texts unchanged)
+          (incoming().scope == 'home' ? (incoming().scope == 'home' && can(h, 'savings', 'manageHousehold')
+              && incoming().visibility == 'household' && incoming().ownerUid == null
+              && incoming().sharedWith == [] && incoming().readers == [] && incoming().audience == 'household') : (incoming().scope == 'personal' && incoming().visibility in ['private', 'shared']
+              && incoming().ownerUid is string && exists(memberDoc(h, incoming().ownerUid))
+              && ((incoming().ownerUid == request.auth.uid && can(h, 'savings', 'personal'))
+                  || (isGuardianOf(h, incoming().ownerUid) && can(h, 'savings', 'personal')))
+              && membersOf(h, incoming().sharedWith) && !(incoming().ownerUid in incoming().sharedWith)
+              && (incoming().visibility == 'private' ? incoming().sharedWith == [] : incoming().sharedWith.size() > 0)
+              && incoming().readers.toSet() == [incoming().ownerUid].concat(incoming().sharedWith).toSet()
+              && incoming().audience == 'restricted' && incoming().allocations == []))
+          ;
+
+        // Metadata only: ownerUid, scope, type, currency and audit fields never change.
+        allow update: if stampedBy()
+          && !('ownerUid' in changed()) && !('scope' in changed()) && !('type' in changed()) && !('currency' in changed())
+          && !('createdBy' in changed()) && !('createdAt' in changed()) && !('schemaVersion' in changed())
+          && assetContentOk(incoming()) && archiveFieldsOk()
+          && // Phase 5.2.1: DISPATCH (branch texts unchanged)
+          (resource.data.scope == 'home' ? (resource.data.scope == 'home' && can(h, 'savings', 'manageHousehold')
+              && changed().hasOnly(['name', 'institution', 'notes', 'zakatTreatment', 'allocations', 'purity', 'active',
+                                    'archivedAt', 'archivedBy', 'updatedBy', 'updatedAt'])) : (resource.data.scope == 'personal' && can(h, 'savings', 'personal')
+              && (request.auth.uid == resource.data.createdBy
+                  || (request.auth.uid == resource.data.ownerUid && !isChildMember(h, request.auth.uid)))
+              && changed().hasOnly(['name', 'institution', 'notes', 'zakatTreatment', 'purity', 'visibility', 'sharedWith',
+                                    'readers', 'audience', 'active', 'archivedAt', 'archivedBy', 'updatedBy', 'updatedAt'])
+              && incoming().visibility in ['private', 'shared']
+              && membersOf(h, incoming().sharedWith) && !(incoming().ownerUid in incoming().sharedWith)
+              && (incoming().visibility == 'private' ? incoming().sharedWith == [] : incoming().sharedWith.size() > 0)
+              && incoming().readers.toSet() == [incoming().ownerUid].concat(incoming().sharedWith).toSet()
+              && incoming().audience == 'restricted'))
+          ;
+        allow delete: if false;
+      }
+
+      match /savingsEvents/{eventId} {
+        allow get, list: if canReadSavings(h, resource.data);
+
+        // Phase 5.1.1: the asset is evaluated ONCE and passed in (it was re-read ~8 times).
+        allow create: if incoming().assetId is string && existsAfter(assetPath(h, incoming().assetId))
+          && savingsEventCreateOk(h, eventId, incoming(), assetAfter(h, incoming().assetId));
+
+        // Only privacy re-labelling after an asset's sharing changed (quantities are immutable).
+        allow update: if changed().hasOnly(['audience', 'readers'])
+          && exists(assetPath(h, resource.data.assetId))
+          && incoming().audience == assetAfter(h, resource.data.assetId).audience
+          && incoming().readers.toSet() == assetAfter(h, resource.data.assetId).readers.toSet()
+          && (request.auth.uid == assetAfter(h, resource.data.assetId).createdBy
+              || request.auth.uid == assetAfter(h, resource.data.assetId).ownerUid);
+        allow delete: if false;
+      }
+
+      // Household reference prices (gold/silver per gram, FX per unit). Append-only: every
+      // manual change is a new audited quote. Provider quotes come from a trusted server.
+      match /priceQuotes/{quoteId} {
+        allow get, list: if isActiveMember(h);
+        allow create: if can(h, 'savings', 'prices')
+          && exactKeys(['kind', 'key', 'priceMinor', 'currency', 'source', 'observedAt', 'note', 'createdBy', 'createdAt', 'schemaVersion'])
+          && incoming().kind in ['metal', 'fx']
+          && incoming().key is string && incoming().key.matches('^(gold-(24|22|21|18)|silver-(999|925|900|800)|[A-Z]{3})$')
+          && incoming().priceMinor is int && incoming().priceMinor > 0 && incoming().priceMinor <= 100000000000
+          && isCurrency(incoming().currency) && incoming().source == 'manual'
+          && incoming().observedAt is int
+          && incoming().observedAt > request.time.toMillis() - 600000 && incoming().observedAt < request.time.toMillis() + 600000
+          && isOptionalText(incoming().note, 200)
+          && incoming().createdBy == request.auth.uid && stampedNow('createdAt') && incoming().schemaVersion == 1;
+        allow update, delete: if false;
+      }
+
+      // Zakat: settings versions, calculation snapshots and payments — per OWNER, private to the
+      // owner (+ their guardians for a child). Append-only; a new Hawl never overwrites the past.
+      match /zakatRecords/{recordId} {
+        allow get, list: if isActiveMember(h) && request.auth.uid in resource.data.readers;
+        // Phase 5.2.1: one permission check (can && (owner || guardian) — same logic as before with a
+        // single can() call) and kind DISPATCH: profile / snapshot / payment are mutually exclusive,
+        // so only the matching kind is evaluated (a denial no longer evaluates all three).
+        allow create: if incoming().kind in ['profile', 'snapshot', 'payment']
+          && incoming().ownerUid is string && exists(memberDoc(h, incoming().ownerUid))
+          && can(h, 'savings', 'zakat')
+          && (incoming().ownerUid == request.auth.uid || isGuardianOf(h, incoming().ownerUid))
+          && incoming().readers is list && incoming().readers.size() <= 6
+          && incoming().ownerUid in incoming().readers && request.auth.uid in incoming().readers
+          && membersOf(h, incoming().readers.removeAll([incoming().ownerUid]))  // ≤ 5 after removing the owner (readers ≤ 6)
+          && incoming().createdBy == request.auth.uid && stampedNow('createdAt') && incoming().schemaVersion == 1
+          && (incoming().kind == 'payment' ? zakatPaymentOk(h, recordId, incoming())
+              : (incoming().kind == 'snapshot' ? zakatSnapshotOk(incoming()) : zakatProfileOk(recordId, incoming())));
+        // Phase 5.2: explicit sharing / revocation — ONLY `readers` may change. Content stays immutable.
+        //   - only the record's owner, or a guardian of a child owner (savings.zakat), may re-label;
+        //   - the owner and the caller stay readers; a child's guardians can never be removed;
+        //   - readers are members of this home (≤ 5 besides the owner).
+        // The Home owner gains nothing here: not being the owner/guardian, the update is denied.
+        allow update: if changed().hasOnly(['readers'])
+          && (resource.data.ownerUid == request.auth.uid || isGuardianOf(h, resource.data.ownerUid))
+          && can(h, 'savings', 'zakat')
+          && incoming().readers is list && incoming().readers.size() <= 6
+          && resource.data.ownerUid in incoming().readers
+          && request.auth.uid in incoming().readers
+          && incoming().readers.hasAll(get(memberDoc(h, resource.data.ownerUid)).data.get('guardianUids', []))
+          && membersOf(h, incoming().readers.removeAll([resource.data.ownerUid]));
+        allow delete: if false;
+      }
+
+
+      // =================================================== HOME ROUTINE & CLEANING (Phase 5.3)
+      match /cleaningTasks/{taskId} {
+        allow get, list: if can(h, 'cleaning', 'view');
+        // Phase 5.3.1: dispatch — generated from a room/device template (`source`) vs manual (unchanged).
+        allow create: if can(h, 'cleaning', 'create')
+          && incoming().createdBy == request.auth.uid && stampedNow('createdAt') && stampedBy() && incoming().schemaVersion == 1
+          && ('source' in incoming()
+            ? cleanGeneratedOk(h, taskId, incoming())
+            : ('templateRef' in incoming()
+            ? cleanTemplatedOk(h, taskId, incoming())      // Phase 5.4c: created from a custom template
+            : (cleanTaskContentOk(h, incoming())
+                && incoming().keys().hasAll(['title', 'instructions', 'roomId', 'priority', 'assignMode', 'assigneeUids', 'eligibleUids', 'recurrence',
+                        'startDate', 'dueDate', 'endDate', 'active', 'archivedAt', 'archivedBy', 'createdBy', 'createdAt',
+                        'updatedBy', 'updatedAt', 'schemaVersion'])
+                && incoming().keys().hasOnly(['title', 'instructions', 'roomId', 'priority', 'assignMode', 'assigneeUids', 'eligibleUids', 'recurrence',
+                        'startDate', 'dueDate', 'endDate', 'active', 'archivedAt', 'archivedBy', 'createdBy', 'createdAt',
+                        'updatedBy', 'updatedAt', 'schemaVersion', 'trigger', 'estimatedMinutes', 'deviceId'])
+                && cleanTriggerOk(h, incoming())
+                && cleanDeviceLinkOk(h, incoming())
+                && (!('estimatedMinutes' in incoming()) || cleanMinutesOk(incoming().estimatedMinutes))
+                && (incoming().roomId == null || isActiveRoom(h, incoming().roomId))
+                && incoming().active == true && incoming().archivedAt == null && incoming().archivedBy == null)));
+        // Dispatch: archive / restore (`active` changes) vs edit (content; active tasks only).
+        allow update: if stampedBy()
+          && !('createdBy' in changed()) && !('createdAt' in changed()) && !('schemaVersion' in changed())
+          && !('source' in changed())                       // Phase 5.3.1: a generated task's origin is permanent
+          && !('trigger' in changed())                      // Phase 5.4b: a device trigger is permanent
+          && !('templateRef' in changed())                  // Phase 5.4c: a template-derived task's origin is permanent
+          && ('active' in changed()
+            ? (can(h, 'cleaning', 'delete')
+                && changed().hasOnly(['active', 'archivedAt', 'archivedBy', 'updatedBy', 'updatedAt']) && archiveFieldsOk())
+            : (resource.data.active == true && can(h, 'cleaning', 'edit')
+                && changed().hasOnly(['title', 'instructions', 'roomId', 'priority', 'assignMode', 'assigneeUids', 'eligibleUids',
+                                      'recurrence', 'startDate', 'dueDate', 'endDate', 'estimatedMinutes', 'deviceId', 'resetGen', 'updatedBy', 'updatedAt'])
+                // V6.3.0.1: a reset moves the task to the NEXT generation only (never back, never skipping)
+                && (!('resetGen' in changed()) || incoming().resetGen == resource.data.get('resetGen', 0) + 1)
+                && cleanTaskContentOk(h, incoming())
+                && (!('deviceId' in changed()) || cleanDeviceLinkOk(h, incoming()))   // Phase 5.4d: a NEW link must be valid
+                && (!('estimatedMinutes' in incoming()) || cleanMinutesOk(incoming().estimatedMinutes))
+                // like Devices: a room is checked only when it CHANGES (archived rooms keep working)
+                && (!('roomId' in changed()) || incoming().roomId == null || isActiveRoom(h, incoming().roomId))));
+        allow delete: if false;
+      }
+
+      // One record per task per due date (id = taskId_YYYYMMDD → no duplicates; first claimer wins).
+      match /cleaningOccurrences/{occId} {
+        allow get, list: if can(h, 'cleaning', 'view');
+        // Phase 5.4a: the original 13 keys are required; skippedOn / postponedTo / actualMinutes are
+        // optional, so documents written by earlier clients remain valid (backward compatible).
+        allow create: if incoming().keys().hasAll(['taskId', 'dueDate', 'status', 'rev', 'claimedBy', 'claimedAt', 'completedBy', 'completedAt',
+                                    'notes', 'createdAt', 'updatedBy', 'updatedAt', 'schemaVersion'])
+          && incoming().keys().hasOnly(['taskId', 'dueDate', 'status', 'rev', 'claimedBy', 'claimedAt', 'completedBy', 'completedAt',
+                                        'notes', 'createdAt', 'updatedBy', 'updatedAt', 'schemaVersion',
+                                        'skippedOn', 'postponedTo', 'actualMinutes', 'triggerEventId', 'triggerSeasonRev', 'taskGen'])
+          && incoming().rev == 1 && incoming().taskId is string
+          && incoming().dueDate is string && isOptionalDate(incoming().dueDate)
+          && exists(cleanTaskPath(h, incoming().taskId))
+          // Phase 5.4b: occurrence identity — date (<task>_YYYYMMDD) / device use (<task>_u<event>) / season (<task>_s<rev>)
+          && cleanOccIdOk(h, occId, incoming(), get(cleanTaskPath(h, incoming().taskId)).data)
+          && cleanDateOk(get(cleanTaskPath(h, incoming().taskId)).data, incoming().dueDate)
+          && cleanMayAct(h, get(cleanTaskPath(h, incoming().taskId)).data)
+          // V6.3.0.1: decided under the task's CURRENT reset generation (stale tabs / devices are refused)
+          && incoming().get('taskGen', 0) == get(cleanTaskPath(h, incoming().taskId)).data.get('resetGen', 0)
+          && stampedNow('createdAt') && incoming().updatedBy == request.auth.uid && stampedNow('updatedAt')
+          && incoming().schemaVersion == 1
+          && cleanOccCreateOk(h, occId, incoming());
+        allow update: if changed().hasOnly(['status', 'claimedBy', 'claimedAt', 'completedBy', 'completedAt', 'notes', 'rev',
+                                            'updatedBy', 'updatedAt', 'skippedOn', 'postponedTo', 'actualMinutes', 'taskGen'])
+          && cleanOptChangesOk(incoming().status)
+          && incoming().rev == resource.data.rev + 1
+          && incoming().updatedBy == request.auth.uid && stampedNow('updatedAt')
+          && exists(cleanTaskPath(h, resource.data.taskId))
+          && incoming().get('taskGen', 0) == get(cleanTaskPath(h, resource.data.taskId)).data.get('resetGen', 0)   // V6.3.0.1
+          && cleanOccUpdateOk(h, occId, incoming(), resource.data, get(cleanTaskPath(h, resource.data.taskId)).data);
+        allow delete: if false;
+      }
+
+      // Append-only audit: created only together with the occurrence change of the same revision.
+      match /cleaningLog/{logId} {
+        allow get, list: if can(h, 'cleaning', 'view');
+        allow create: if incoming().keys().hasAll(['occurrenceId', 'taskId', 'rev', 'action', 'actorUid', 'at', 'notes', 'schemaVersion'])
+          && incoming().keys().hasOnly(['occurrenceId', 'taskId', 'rev', 'action', 'actorUid', 'at', 'notes', 'schemaVersion',
+                                        'actualMinutes', 'postponedTo'])
+          && incoming().action in ['claim', 'unclaim', 'complete', 'reopen', 'skip', 'postpone', 'resume']
+          // Phase 5.4a: minutes only on a completion; a postponement records its new date
+          && (!('actualMinutes' in incoming()) || (incoming().action == 'complete' && cleanMinutesOk(incoming().actualMinutes)))
+          && (incoming().action == 'postpone' ? incoming().postponedTo is string : !('postponedTo' in incoming()))
+          && incoming().actorUid == request.auth.uid && incoming().at == request.time
+          && isOptionalText(incoming().notes, 300) && incoming().schemaVersion == 1
+          && incoming().occurrenceId is string && incoming().rev is int
+          && logId == incoming().occurrenceId + '_r' + string(incoming().rev)
+          && existsAfter(cleanOccPath(h, incoming().occurrenceId))
+          && getAfter(cleanOccPath(h, incoming().occurrenceId)).data.rev == incoming().rev
+          && getAfter(cleanOccPath(h, incoming().occurrenceId)).data.updatedBy == request.auth.uid
+          && getAfter(cleanOccPath(h, incoming().occurrenceId)).data.taskId == incoming().taskId;
+        allow update, delete: if false;
+      }
+
+      // =================================================== ADVANCED CLEANING (Phase 5.4a)
+      // The day's routine SELECTION, saved once (create-only, id = the day). Statuses are never stored
+      // here: they are read live from cleaningOccurrences (one source of truth).
+      match /cleaningRoutines/{day} {
+        allow get, list: if can(h, 'cleaning', 'view');
+        allow create: if exactKeys(['date', 'items', 'catchUpMax', 'startHour', 'createdBy', 'createdAt', 'schemaVersion'])
+          && incoming().date == day && cleanNearToday(day)
+          && incoming().items is list && incoming().items.size() <= 200
+          && incoming().catchUpMax is int && incoming().catchUpMax >= 0 && incoming().catchUpMax <= 10
+          && incoming().startHour is int && incoming().startHour >= 0 && incoming().startHour <= 6
+          && incoming().createdBy == request.auth.uid && stampedNow('createdAt') && incoming().schemaVersion == 1
+          && (can(h, 'cleaning', 'complete') || can(h, 'cleaning', 'create'));
+        allow update, delete: if false;
+      }
+
+      // Household cleaning settings (standalone settings/general: catchUpMax, startHour).
+      match /cleaningSettings/{sid} {
+        allow get, list: if can(h, 'cleaning', 'view');
+        allow create, update: if sid == 'general'
+          && exactKeys(['catchUpMax', 'startHour', 'updatedBy', 'updatedAt', 'schemaVersion'])
+          && incoming().catchUpMax is int && incoming().catchUpMax >= 0 && incoming().catchUpMax <= 10
+          && incoming().startHour is int && incoming().startHour >= 0 && incoming().startHour <= 6
+          && stampedBy() && incoming().schemaVersion == 1
+          && can(h, 'cleaning', 'edit');
+        allow delete: if false;
+      }
+
+      // =================================================== DEVICE USAGE & SEASONS (Phase 5.4b)
+      // Usage events: append-only. A correction is a NEW 'void' event (<eventId>_void, at most one).
+      match /cleaningDeviceEvents/{eventId} {
+        allow get, list: if can(h, 'cleaning', 'view');
+        allow create: if exactKeys(['deviceId', 'kind', 'voidsEventId', 'note', 'actorUid', 'at', 'schemaVersion'])
+          && incoming().actorUid == request.auth.uid && incoming().at == request.time && incoming().schemaVersion == 1
+          && isOptionalText(incoming().note, 200)
+          && (incoming().kind == 'use'
+                ? (eventId.matches('^[A-Za-z0-9]{12,40}$') && incoming().voidsEventId == null && cleanActiveDevice(h, incoming().deviceId))
+                : (incoming().kind == 'void' && incoming().voidsEventId is string
+                   && eventId == incoming().voidsEventId + '_void'
+                   && exists(cleanEventPath(h, incoming().voidsEventId))
+                   && cleanUseOf(get(cleanEventPath(h, incoming().voidsEventId)).data, incoming().deviceId)))
+          && can(h, 'cleaning', 'complete');
+        allow update, delete: if false;
+      }
+
+      // Current season state of a device (rev n → n+1), only together with its season entry.
+      match /cleaningDeviceState/{deviceId} {
+        allow get, list: if can(h, 'cleaning', 'view');
+        allow create: if exactKeys(['state', 'rev', 'updatedBy', 'updatedAt', 'schemaVersion'])
+          && incoming().rev == 1 && incoming().state in ['active', 'inactive'] && stampedBy() && incoming().schemaVersion == 1
+          && cleanActiveDevice(h, deviceId) && cleanSeasonEntryOk(h, deviceId, incoming())
+          && can(h, 'cleaning', 'edit');
+        allow update: if changed().hasOnly(['state', 'rev', 'updatedBy', 'updatedAt'])
+          && incoming().rev == resource.data.rev + 1 && incoming().state in ['active', 'inactive'] && incoming().state != resource.data.state
+          && stampedBy() && cleanActiveDevice(h, deviceId) && cleanSeasonEntryOk(h, deviceId, incoming())
+          && can(h, 'cleaning', 'edit');
+        allow delete: if false;
+      }
+
+      // Season history: append-only, created only with the state change of the same revision.
+      match /cleaningDeviceSeasons/{entryId} {
+        allow get, list: if can(h, 'cleaning', 'view');
+        allow create: if exactKeys(['deviceId', 'rev', 'state', 'note', 'actorUid', 'at', 'schemaVersion'])
+          && incoming().rev is int && entryId == incoming().deviceId + '_s' + string(incoming().rev)
+          && incoming().actorUid == request.auth.uid && incoming().at == request.time && incoming().schemaVersion == 1
+          && isOptionalText(incoming().note, 200)
+          && existsAfter(cleanStatePath(h, incoming().deviceId))
+          && getAfter(cleanStatePath(h, incoming().deviceId)).data.rev == incoming().rev
+          && getAfter(cleanStatePath(h, incoming().deviceId)).data.state == incoming().state;
+        allow update, delete: if false;
+      }
+
+      // =================================================== CUSTOM CLEANING TEMPLATES (Phase 5.4c)
+      // Household-owned reusable task DEFINITIONS (never tasks). Editors only; rev n → n+1; archive only.
+      match /cleaningCustomTemplates/{templateId} {
+        allow get, list: if can(h, 'cleaning', 'view');
+        allow create: if templateId.matches('^[A-Za-z0-9_]{6,60}$')
+          && exactKeys(['pack', 'title', 'titleEn', 'instructions', 'minutes', 'priority', 'target', 'recurrence', 'trigger',
+                        'active', 'archivedAt', 'archivedBy', 'rev', 'createdBy', 'createdAt', 'updatedBy', 'updatedAt', 'schemaVersion'])
+          && cleanTemplateContentOk(incoming())
+          && incoming().active == true && incoming().archivedAt == null && incoming().archivedBy == null && incoming().rev == 1
+          && incoming().createdBy == request.auth.uid && stampedNow('createdAt') && stampedBy() && incoming().schemaVersion == 1
+          && can(h, 'cleaning', 'edit');
+        allow update: if incoming().rev == resource.data.rev + 1 && stampedBy()
+          && !('createdBy' in changed()) && !('createdAt' in changed()) && !('schemaVersion' in changed())
+          && (incoming().active == false
+                ? (resource.data.active == true && changed().hasOnly(['active', 'archivedAt', 'archivedBy', 'rev', 'updatedBy', 'updatedAt'])
+                   && incoming().archivedAt == request.time && incoming().archivedBy == request.auth.uid)
+                : (resource.data.active == false
+                    ? (changed().hasOnly(['active', 'archivedAt', 'archivedBy', 'rev', 'updatedBy', 'updatedAt'])
+                       && incoming().archivedAt == null && incoming().archivedBy == null)
+                    : (changed().hasOnly(['pack', 'title', 'titleEn', 'instructions', 'minutes', 'priority', 'target', 'recurrence', 'trigger',
+                                          'rev', 'updatedBy', 'updatedAt'])
+                       && cleanTemplateContentOk(incoming()))))
+          && can(h, 'cleaning', 'edit');
+        allow delete: if false;
+      }
+
+      // =================================================== DEVICE MAINTENANCE (Phase 5.5)
+      // Preventive plans. Device link: an ACTIVE device of THIS home at creation; immutable after.
+      match /maintenancePlans/{planId} {
+        allow get, list: if mtCan(h, 'view');
+        allow create: if planId.matches('^[A-Za-z0-9_-]{6,40}$')
+          && exactKeys(['title', 'instructions', 'notes', 'deviceId', 'recurrence', 'firstDueDate', 'assigneeUid', 'estimatedMinutes', 'priority',
+                        'active', 'archivedAt', 'archivedBy', 'completedCount', 'lastDoneDate', 'rev', 'createdBy', 'createdAt', 'updatedBy', 'updatedAt', 'schemaVersion'])
+          && mtPlanContentOk(incoming())
+          && incoming().active == true && incoming().archivedAt == null && incoming().archivedBy == null
+          && incoming().completedCount == 0 && incoming().lastDoneDate == null && incoming().rev == 1
+          && incoming().createdBy == request.auth.uid && stampedNow('createdAt') && stampedBy() && incoming().schemaVersion == 1
+          && mtActiveDevice(h, incoming().deviceId) && mtMemberOk(h, incoming().assigneeUid)
+          && mtCan(h, 'create');
+        allow update: if incoming().rev == resource.data.rev + 1 && stampedBy()
+          && !('deviceId' in changed()) && !('createdBy' in changed()) && !('createdAt' in changed()) && !('schemaVersion' in changed())
+          && ('completedCount' in changed()
+            // completion: count + 1 ONLY together with its record <planId>_c<n> (one-time plans: once)
+            ? (changed().hasOnly(['completedCount', 'lastDoneDate', 'rev', 'updatedBy', 'updatedAt'])
+               && incoming().completedCount == resource.data.completedCount + 1 && resource.data.active == true
+               && (resource.data.recurrence.kind != 'once' || resource.data.completedCount == 0)
+               && existsAfter(mtPath(h, 'maintenanceRecords', planId + '_c' + string(incoming().completedCount)))
+               && getAfter(mtPath(h, 'maintenanceRecords', planId + '_c' + string(incoming().completedCount))).data.serviceDate == incoming().lastDoneDate
+               && mtCan(h, 'complete'))
+            : ('active' in changed()
+              // archive / reactivate
+              ? (changed().hasOnly(['active', 'archivedAt', 'archivedBy', 'rev', 'updatedBy', 'updatedAt'])
+                 && (incoming().active == false
+                      ? (resource.data.active == true && incoming().archivedAt == request.time && incoming().archivedBy == request.auth.uid)
+                      : (resource.data.active == false && incoming().archivedAt == null && incoming().archivedBy == null))
+                 && mtCan(h, 'delete'))
+              // edit (active plans only)
+              : (changed().hasOnly(['title', 'instructions', 'notes', 'recurrence', 'firstDueDate', 'assigneeUid', 'estimatedMinutes', 'priority',
+                                    'rev', 'updatedBy', 'updatedAt'])
+                 && resource.data.active == true && mtPlanContentOk(incoming())
+                 && (!('assigneeUid' in changed()) || mtMemberOk(h, incoming().assigneeUid))
+                 && mtCan(h, 'edit'))));
+        allow delete: if false;
+      }
+
+      // Service history: APPEND-ONLY, immutable. Completion <planId>_c<n>, repair <faultId>_r<rev>,
+      // correction <recordId>_fix<k> — each proven against the plan / fault / original record.
+      match /maintenanceRecords/{recordId} {
+        allow get, list: if mtCan(h, 'view');
+        allow create: if exactKeys(['kind', 'deviceId', 'planId', 'faultId', 'correctsRecordId', 'serviceDate', 'workPerformed', 'provider', 'parts',
+                                    'notes', 'costMinor', 'currency', 'actorUid', 'at', 'schemaVersion'])
+          && incoming().actorUid == request.auth.uid && incoming().at == request.time && incoming().schemaVersion == 1
+          && incoming().kind in ['preventive', 'repair'] && mtServiceOk(incoming())
+          && (incoming().correctsRecordId != null
+            ? (incoming().correctsRecordId is string && recordId.matches('^' + incoming().correctsRecordId + '_fix[0-9]{1,3}$')
+               && exists(mtPath(h, 'maintenanceRecords', incoming().correctsRecordId))
+               && get(mtPath(h, 'maintenanceRecords', incoming().correctsRecordId)).data.correctsRecordId == null
+               && get(mtPath(h, 'maintenanceRecords', incoming().correctsRecordId)).data.kind == incoming().kind
+               && get(mtPath(h, 'maintenanceRecords', incoming().correctsRecordId)).data.deviceId == incoming().deviceId
+               && get(mtPath(h, 'maintenanceRecords', incoming().correctsRecordId)).data.planId == incoming().planId
+               && get(mtPath(h, 'maintenanceRecords', incoming().correctsRecordId)).data.faultId == incoming().faultId
+               && mtCan(h, 'edit'))
+            : (incoming().kind == 'preventive'
+              ? (incoming().planId is string && incoming().faultId == null
+                 && existsAfter(mtPath(h, 'maintenancePlans', incoming().planId))
+                 && recordId == incoming().planId + '_c' + string(getAfter(mtPath(h, 'maintenancePlans', incoming().planId)).data.completedCount)
+                 && getAfter(mtPath(h, 'maintenancePlans', incoming().planId)).data.completedCount
+                      == get(mtPath(h, 'maintenancePlans', incoming().planId)).data.completedCount + 1
+                 && getAfter(mtPath(h, 'maintenancePlans', incoming().planId)).data.deviceId == incoming().deviceId
+                 && mtCan(h, 'complete'))
+              : (incoming().faultId is string && incoming().planId == null
+                 && existsAfter(mtPath(h, 'maintenanceFaults', incoming().faultId))
+                 && recordId == incoming().faultId + '_r' + string(getAfter(mtPath(h, 'maintenanceFaults', incoming().faultId)).data.rev)
+                 && getAfter(mtPath(h, 'maintenanceFaults', incoming().faultId)).data.status == 'resolved'
+                 && get(mtPath(h, 'maintenanceFaults', incoming().faultId)).data.status == 'inProgress'
+                 && getAfter(mtPath(h, 'maintenanceFaults', incoming().faultId)).data.deviceId == incoming().deviceId
+                 && mtCan(h, 'complete'))));
+        allow update, delete: if false;
+      }
+
+      // Faults: open → inProgress → resolved → closed (+ cancelled / reopen); every change rev + 1 with
+      // its append-only event <faultId>_r<rev> recording exactly from → to by the caller.
+      match /maintenanceFaults/{faultId} {
+        allow get, list: if mtCan(h, 'view');
+        allow create: if faultId.matches('^[A-Za-z0-9_-]{6,40}$')
+          && exactKeys(['summary', 'description', 'diagnosis', 'resolution', 'deviceId', 'severity', 'assigneeUid', 'estimateMinor', 'estimateCurrency',
+                        'status', 'rev', 'reportedBy', 'reportedAt', 'resolvedAt', 'resolvedBy', 'closedAt', 'closedBy', 'updatedBy', 'updatedAt', 'schemaVersion'])
+          && mtFaultContentOk(incoming())
+          && incoming().status == 'open' && incoming().rev == 1
+          && incoming().reportedBy == request.auth.uid && stampedNow('reportedAt') && stampedBy() && incoming().schemaVersion == 1
+          && incoming().resolvedAt == null && incoming().resolvedBy == null && incoming().closedAt == null && incoming().closedBy == null
+          && mtActiveDevice(h, incoming().deviceId) && mtMemberOk(h, incoming().assigneeUid)
+          && existsAfter(mtPath(h, 'maintenanceFaultEvents', faultId + '_r1'))
+          && mtCan(h, 'create');
+        allow update: if incoming().rev == resource.data.rev + 1 && stampedBy()
+          && changed().hasOnly(['summary', 'description', 'diagnosis', 'resolution', 'severity', 'assigneeUid', 'estimateMinor', 'estimateCurrency',
+                                'status', 'resolvedAt', 'resolvedBy', 'closedAt', 'closedBy', 'rev', 'updatedBy', 'updatedAt'])
+          && mtFaultContentOk(incoming())
+          && (!('assigneeUid' in changed()) || mtMemberOk(h, incoming().assigneeUid))
+          && existsAfter(mtPath(h, 'maintenanceFaultEvents', faultId + '_r' + string(incoming().rev)))
+          && mtTransitionOk(h, resource.data, incoming());
+        allow delete: if false;
+      }
+
+      // Fault history: append-only; only together with the matching fault change.
+      match /maintenanceFaultEvents/{eventId} {
+        allow get, list: if mtCan(h, 'view');
+        allow create: if exactKeys(['faultId', 'rev', 'fromStatus', 'toStatus', 'note', 'actorUid', 'at', 'schemaVersion'])
+          && incoming().faultId is string && incoming().rev is int && eventId == incoming().faultId + '_r' + string(incoming().rev)
+          && incoming().actorUid == request.auth.uid && incoming().at == request.time && incoming().schemaVersion == 1
+          && isOptionalText(incoming().note, 500)
+          && existsAfter(mtPath(h, 'maintenanceFaults', incoming().faultId))
+          && getAfter(mtPath(h, 'maintenanceFaults', incoming().faultId)).data.rev == incoming().rev
+          && getAfter(mtPath(h, 'maintenanceFaults', incoming().faultId)).data.status == incoming().toStatus
+          && (incoming().rev == 1
+                ? (incoming().fromStatus == null && !exists(mtPath(h, 'maintenanceFaults', incoming().faultId)))
+                : (get(mtPath(h, 'maintenanceFaults', incoming().faultId)).data.status == incoming().fromStatus));
+        allow update, delete: if false;
+      }
+
+      // =================================================== REMINDERS (Phase 5.6) — per-user presentation state
+      // OWNER-ONLY. Never grants access to Cleaning / Maintenance data (reminders are derived client-side
+      // from the user's already-authorized subscriptions). Read / dismiss / snooze never change a task.
+      match /reminderStates/{sid} {
+        allow get, list: if isActiveMember(h) && resource.data.ownerUid == request.auth.uid;
+        allow create, update: if isActiveMember(h)
+          && sid.matches('^' + request.auth.uid + '_[0-9a-f]{16}$')
+          && exactKeys(['ownerUid', 'key', 'state', 'snoozeUntil', 'sourceKind', 'updatedAt', 'schemaVersion'])
+          && incoming().ownerUid == request.auth.uid
+          && (resource == null || resource.data.ownerUid == request.auth.uid)
+          && incoming().key is string && incoming().key.size() <= 200 && incoming().key.matches('^[cpf]:[A-Za-z0-9_@:.-]{1,198}$')
+          && (incoming().sourceKind == 'cleaning' ? incoming().key.matches('^c:.*')
+              : (incoming().sourceKind == 'maintenancePlan' ? incoming().key.matches('^p:.*')
+                 : (incoming().sourceKind == 'maintenanceFault' && incoming().key.matches('^f:.*'))))
+          && incoming().state in ['read', 'dismissed', 'snoozed']
+          && (incoming().state == 'snoozed'
+                ? (incoming().snoozeUntil is string && incoming().snoozeUntil.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
+                   && cleanDayTs(incoming().snoozeUntil) > request.time - duration.value(1, 'd')
+                   && cleanDayTs(incoming().snoozeUntil) < request.time + duration.value(367, 'd'))
+                : incoming().snoozeUntil == null)
+          && incoming().updatedAt == request.time && incoming().schemaVersion == 1;
+        allow delete: if resource.data.ownerUid == request.auth.uid;
+      }
+      match /reminderPrefs/{uid} {
+        allow get: if uid == request.auth.uid && isActiveMember(h);
+        allow create, update: if uid == request.auth.uid && isActiveMember(h)
+          && exactKeys(['lookAheadDays', 'cleaning', 'maintenancePlans', 'maintenanceFaults', 'quietStart', 'quietEnd', 'updatedAt', 'schemaVersion'])
+          && incoming().lookAheadDays in [1, 3, 7, 14]
+          && incoming().cleaning is bool && incoming().maintenancePlans is bool && incoming().maintenanceFaults is bool
+          && (incoming().quietStart == null || (incoming().quietStart is int && incoming().quietStart >= 0 && incoming().quietStart <= 23))
+          && (incoming().quietEnd == null || (incoming().quietEnd is int && incoming().quietEnd >= 0 && incoming().quietEnd <= 23))
+          && incoming().updatedAt == request.time && incoming().schemaVersion == 1;
+        allow delete: if uid == request.auth.uid;
+      }
+
+      // =================================================== V6.1 RECIPES (chef.*) — archived, never deleted
+      match /recipes/{recipeId} {
+        allow get, list: if can(h, 'chef', 'view');
+        allow create: if recipeId.matches('^[A-Za-z0-9_-]{6,40}$')
+          && exactKeys(['titleEn', 'titleAr', 'description', 'category', 'prepMinutes', 'cookMinutes', 'servings', 'videoId', 'videoUrl', 'ingredients', 'steps', 'notes',
+                        'favoritedBy', 'archived', 'archivedAt', 'archivedBy', 'rev', 'createdBy', 'createdAt', 'updatedBy', 'updatedAt', 'schemaVersion'])
+          && recipeContentOk(incoming()) && incoming().favoritedBy == [] && incoming().archived == false
+          && incoming().archivedAt == null && incoming().archivedBy == null && incoming().rev == 1
+          && incoming().createdBy == request.auth.uid && stampedNow('createdAt') && stampedBy() && incoming().schemaVersion == 1
+          && can(h, 'chef', 'create');
+        // V6.1.1: a soft-deleted recipe is immutable (kept for future references); delete = chef.delete.
+        allow update: if resource.data.get('deletedAt', null) == null && (changed().hasOnly(['favoritedBy'])
+          ? (favOnlyMine(resource.data.favoritedBy, incoming().favoritedBy) && can(h, 'chef', 'view'))
+          : (incoming().rev == resource.data.rev + 1 && stampedBy()
+             && ('deletedAt' in changed()
+               ? (changed().hasOnly(['deletedAt', 'deletedBy', 'rev', 'updatedBy', 'updatedAt'])
+                  && incoming().deletedAt == request.time && incoming().deletedBy == request.auth.uid && can(h, 'chef', 'delete'))
+               : can(h, 'chef', 'edit') && ('archived' in changed()
+                   ? (changed().hasOnly(['archived', 'archivedAt', 'archivedBy', 'rev', 'updatedBy', 'updatedAt'])
+                      && (incoming().archived == true
+                            ? (resource.data.archived == false && incoming().archivedAt == request.time && incoming().archivedBy == request.auth.uid)
+                            : (resource.data.archived == true && incoming().archivedAt == null && incoming().archivedBy == null)))
+                   : (changed().hasOnly(['titleEn', 'titleAr', 'description', 'category', 'prepMinutes', 'cookMinutes', 'servings', 'videoId', 'videoUrl',
+                                         'ingredients', 'steps', 'notes', 'rev', 'updatedBy', 'updatedAt'])
+                      && resource.data.archived == false && recipeContentOk(incoming()))))));
+        allow delete: if false;
+      }
+      // =================================================== V6.1 COOKING TIMERS — owner-only, per user per Home
+      match /cookingTimers/{timerId} {
+        allow get, list: if isActiveMember(h) && resource.data.ownerUid == request.auth.uid;
+        allow create: if isActiveMember(h) && timerId.matches('^[A-Za-z0-9_-]{6,40}$')
+          && exactKeys(['ownerUid', 'label', 'durationMs', 'status', 'endsAtMs', 'remainingMsAtPause', 'recipeId', 'stepId', 'rev', 'createdAt', 'updatedAt', 'schemaVersion'])
+          && incoming().ownerUid == request.auth.uid && timerOk(incoming()) && incoming().rev == 1
+          && incoming().createdAt == request.time && incoming().updatedAt == request.time && incoming().schemaVersion == 1;
+        allow update: if isActiveMember(h) && resource.data.ownerUid == request.auth.uid
+          && changed().hasOnly(['label', 'status', 'endsAtMs', 'remainingMsAtPause', 'rev', 'updatedAt'])
+          && incoming().rev == resource.data.rev + 1 && incoming().updatedAt == request.time && timerOk(incoming());
+        allow delete: if isActiveMember(h) && resource.data.ownerUid == request.auth.uid;
+      }
+
+      // =================================================== V6.2 CALENDAR (calendar.*) — soft delete only
+      match /calendarEvents/{eventId} {
+        allow get, list: if isActiveMember(h)
+          && ((resource.data.get('audience', '') == 'household' && can(h, 'calendar', 'view')) || resource.data.get('createdBy', '') == request.auth.uid);
+        // Manual events: any id. CSV imports: id == 'csv_' + sourceKey (stable fingerprint) → create-only = no duplicates.
+        allow create: if eventId.matches('^[A-Za-z0-9_-]{6,40}$')
+          && exactKeys(['title', 'type', 'shift', 'allDay', 'startDate', 'startTime', 'endDate', 'endTime', 'description', 'location', 'audience', 'timezone', 'done',
+                        'source', 'sourceKey', 'importBatchId', 'importRev', 'deletedAt', 'deletedBy', 'rev', 'createdBy', 'createdAt', 'updatedBy', 'updatedAt', 'schemaVersion'])
+          && calContentOk(incoming()) && incoming().done == false && incoming().audience in ['household', 'private']
+          && isName(incoming().timezone, 60) && incoming().deletedAt == null && incoming().deletedBy == null && incoming().rev == 1
+          && incoming().createdBy == request.auth.uid && stampedNow('createdAt') && stampedBy() && incoming().schemaVersion == 1
+          && (incoming().source == 'manual' ? (incoming().sourceKey == null && incoming().importBatchId == null && incoming().importRev == null)
+              : (incoming().source == 'csv' && incoming().sourceKey is string && incoming().sourceKey.matches('^[0-9a-f]{16}$')
+                 && eventId == 'csv_' + incoming().sourceKey && incoming().importRev == 1 && calBatchOpen(h, incoming())))
+          && calMayWrite(h, incoming(), 'create');
+        allow update: if incoming().rev == resource.data.rev + 1 && stampedBy()
+          && (resource.data.deletedAt != null
+              // V6.2.1 deliberate re-import: a REMOVED csv row is restored into the importer's open batch (never a manual event)
+              ? (resource.data.source == 'csv'
+                 && changed().hasOnly(['title', 'type', 'shift', 'allDay', 'startDate', 'startTime', 'endDate', 'endTime', 'description', 'location', 'done',
+                                       'deletedAt', 'deletedBy', 'importBatchId', 'importRev', 'rev', 'updatedBy', 'updatedAt'])
+                 && incoming().deletedAt == null && incoming().deletedBy == null && incoming().done == false && incoming().importRev == incoming().rev
+                 && calContentOk(incoming()) && calBatchOpen(h, incoming()) && calMayWrite(h, resource.data, 'create'))
+          : ('deletedAt' in changed()
+                ? (changed().hasOnly(['deletedAt', 'deletedBy', 'rev', 'updatedBy', 'updatedAt'])
+                   && incoming().deletedAt == request.time && incoming().deletedBy == request.auth.uid && calMayWrite(h, resource.data, 'delete'))
+                : (changed().hasOnly(['title', 'type', 'shift', 'allDay', 'startDate', 'startTime', 'endDate', 'endTime', 'description', 'location', 'done', 'rev', 'updatedBy', 'updatedAt'])
+                   && calContentOk(incoming()) && (!('done' in changed()) || incoming().type == 'task')
+                   && calMayWrite(h, resource.data, 'edit'))));
+        allow delete: if false;
+      }
+      // =================================================== V6.2.1 CALENDAR CSV IMPORT BATCHES (metadata only)
+      // Visibility = the batch's audience (private batches: their importer only). Removing a batch is a status
+      // change here + per-event soft deletes (each checked by the event rule above). Never hard-deleted.
+      match /calendarImports/{batchId} {
+        allow get, list: if isActiveMember(h)
+          && ((resource.data.get('audience', '') == 'household' && can(h, 'calendar', 'view')) || resource.data.get('createdBy', '') == request.auth.uid);
+        allow create: if batchId.matches('^[A-Za-z0-9_-]{6,40}$')
+          && exactKeys(['fileName', 'audience', 'status', 'createdCount', 'removedCount', 'keptCount', 'rev', 'createdBy', 'createdAt', 'updatedBy', 'updatedAt', 'schemaVersion'])
+          && isName(incoming().fileName, 200) && incoming().audience in ['household', 'private'] && incoming().status == 'importing'
+          && incoming().createdCount == 0 && incoming().removedCount == 0 && incoming().keptCount == 0 && incoming().rev == 1
+          && incoming().createdBy == request.auth.uid && stampedNow('createdAt') && stampedBy() && incoming().schemaVersion == 1
+          && calMayWrite(h, incoming(), 'create');
+        allow update: if resource.data.status != 'removed' && incoming().rev == resource.data.rev + 1 && stampedBy()
+          && changed().hasOnly(['status', 'createdCount', 'removedCount', 'keptCount', 'rev', 'updatedBy', 'updatedAt'])
+          && calCount(incoming().createdCount) && calCount(incoming().removedCount) && calCount(incoming().keptCount)
+          && (incoming().status == 'active'
+                ? (resource.data.status == 'importing' && calMine(resource.data) && calMayWrite(h, resource.data, 'create')
+                   && !('removedCount' in changed()) && !('keptCount' in changed()))
+                : (incoming().status in ['removing', 'removed'] && !('createdCount' in changed()) && calMayWrite(h, resource.data, 'delete')));
+        allow delete: if false;
+      }
+      // =================================================== V6.2 MONTHLY BUDGET SETTING (owner / admin)
+      // One document per month: a stable denominator for that month; editing never rewrites a past month.
+      match /financeMonthly/{monthId} {
+        allow get, list: if canReadFinance(h, resource.data);
+        allow create, update: if monthId.matches('^20[0-9][0-9]-(0[1-9]|1[0-2])$') && monthWritable(monthId)
+          && exactKeys(['budgetMinor', 'categoryLimits', 'audience', 'readers', 'rev', 'updatedBy', 'updatedAt', 'schemaVersion'])
+          && (incoming().budgetMinor == null || isMoney(incoming().budgetMinor))
+          && incoming().categoryLimits is map && incoming().categoryLimits.size() <= 19
+          && incoming().categoryLimits.keys().hasOnly(['groceries', 'food', 'transport', 'fuel', 'home', 'utilities', 'children', 'education', 'health', 'shopping',
+                                                       'entertainment', 'subscriptions', 'rent', 'mortgage', 'insurance', 'maintenance', 'gifts', 'other'])
+          && incoming().audience == 'household' && incoming().readers == [] && incoming().schemaVersion == 1 && stampedBy()
+          && incoming().rev == (resource == null ? 1 : resource.data.rev + 1)
+          && budgetAdmin(h);
+        allow delete: if false;
+      }
+
+      // Future module collections (expenses, recipes, cleaning…) are added here, each
+      // gated by can(h, '<module>', '<action>'). Until then they are denied by default.
+    }
+  }
+}

@@ -1,0 +1,1 @@
+{ "name": "firebase", "type": "module", "exports": { "./firestore": "./firestore.js" } }

@@ -1,0 +1,28 @@
+/* Family & Members (Phase 4A). Logical properties + theme variables only (RTL/dark safe). */
+.member-list { list-style: none; display: grid; gap: 0.6rem; }
+.member-card { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 0.85rem; align-items: center; padding: 0.9rem; border-radius: var(--radius-lg); background: var(--surface); border: 1px solid var(--border); }
+.member-card--inactive { opacity: 0.72; }
+.member-card__main { display: grid; gap: 0.25rem; min-width: 0; }
+.member-card__name { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; font-weight: 800; overflow-wrap: anywhere; }
+.member-card__meta { display: flex; flex-wrap: wrap; gap: 0.3rem; }
+.member-card__actions { justify-content: flex-end; }
+.avatar--lg { inline-size: 44px; block-size: 44px; font-size: 0.95rem; }
+@media (max-width: 560px) {
+  .member-card { grid-template-columns: auto minmax(0, 1fr); }
+  .member-card__actions { grid-column: 1 / -1; justify-content: stretch; }
+  .member-card__actions .btn { flex: 1 1 auto; min-height: 44px; }
+}
+.invite-code { font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace; font-size: 1.15rem; font-weight: 800; letter-spacing: 0.04em; padding: 0.7rem 0.9rem; border-radius: var(--radius-md); background: var(--surface-2); border: 1px dashed var(--border-strong); overflow-wrap: anywhere; user-select: all; }
+.invite-code--sm { font-size: 0.82rem; padding: 0; border: 0; background: none; letter-spacing: 0.02em; }
+.invite-made { display: grid; gap: 0.6rem; }
+.invite-row { grid-template-columns: auto minmax(0, 1fr) auto; }
+@media (max-width: 560px) { .invite-row { grid-template-columns: minmax(0, 1fr); } }
+.invite-panel { display: grid; gap: 0.75rem; }
+.invite-panel:empty { display: none; }
+.invite-panel__or { text-align: center; font-size: 0.82rem; color: var(--muted); }
+.invite-card { display: grid; gap: 0.6rem; padding: 1rem; border-radius: var(--radius-lg); background: var(--info-soft); border: 1px solid var(--info-border); }
+.invite-card--bad { background: none; border: 0; padding: 0; }
+.invite-card__eyebrow { font-size: 0.8rem; color: var(--muted); font-weight: 700; }
+.invite-card__home { font-size: 1.3rem; font-weight: 800; overflow-wrap: anywhere; }
+.join-card { display: grid; gap: 0.9rem; max-inline-size: 560px; }
+.gate__row--split { justify-content: space-between; flex-wrap: wrap; gap: 0.5rem; }

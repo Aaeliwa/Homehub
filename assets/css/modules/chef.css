@@ -1,0 +1,77 @@
+/* V6.1 Recipes + cooking timers — existing tokens; logical properties for RTL. */
+.ck-grid { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.9rem; grid-template-columns: repeat(auto-fill, minmax(min(100%, 14rem), 1fr)); }
+.ck-card { position: relative; border: 1px solid var(--border); border-radius: var(--radius-lg, 14px); background: var(--surface); overflow: hidden; }
+.ck-card__open { display: grid; gap: 0.25rem; inline-size: 100%; padding: 0 0 0.8rem; background: none; border: 0; text-align: start; cursor: pointer; color: inherit; }
+.ck-card__thumb { inline-size: 100%; aspect-ratio: 16 / 9; object-fit: cover; display: grid; place-items: center; background: var(--surface-2); font-size: 2.4rem; }
+.ck-card__title { font-weight: 800; padding-inline: 0.8rem; overflow-wrap: anywhere; }
+.ck-card__meta { color: var(--text-2); font-size: 0.85rem; padding-inline: 0.8rem; }
+.ck-fav { position: absolute; inset-block-start: 0.4rem; inset-inline-end: 0.4rem; min-inline-size: 44px; min-block-size: 44px; border-radius: 50%; border: 0; background: rgba(0, 0, 0, 0.45); color: #fde047; font-size: 1.3rem; cursor: pointer; }
+.ck-video { position: relative; inline-size: 100%; aspect-ratio: 16 / 9; border-radius: var(--radius-lg, 14px); overflow: hidden; background: #000; margin-block-end: 0.5rem; }
+.ck-video iframe, .ck-video__play, .ck-video__play img { position: absolute; inset: 0; inline-size: 100%; block-size: 100%; border: 0; }
+.ck-video__play { padding: 0; cursor: pointer; background: #000; }
+.ck-video__play img { object-fit: cover; opacity: 0.85; }
+.ck-video__icon { position: absolute; inset: 50% auto auto 50%; transform: translate(-50%, -50%); inline-size: 4.2rem; block-size: 4.2rem; border-radius: 50%; display: grid; place-items: center;
+  background: rgba(220, 38, 38, 0.92); color: #fff; font-size: 1.7rem; }
+.ck-video__play:focus-visible { outline: 3px solid var(--accent, #f97316); outline-offset: -3px; }
+.ck-serv { display: flex; align-items: center; gap: 0.6rem; margin-block-end: 0.5rem; }
+.ck-steps { display: grid; gap: 0.6rem; padding-inline-start: 1.2rem; }
+.ck-row { display: grid; grid-template-columns: 5.5rem 6.5rem minmax(0, 1fr) auto; gap: 0.4rem; }
+#ck-steps .ck-row { grid-template-columns: minmax(0, 1fr) 5.5rem auto; }
+@media (max-width: 520px) { .ck-row { grid-template-columns: 1fr 1fr auto; } .ck-row .ck-ing-name { grid-column: 1 / -1; } }
+.ck-cook { border: 1px solid var(--border); border-radius: var(--radius-lg, 14px); padding: 1.1rem; background: var(--surface); }
+.ck-cook__text { font-size: clamp(1.25rem, 4.5vw, 1.7rem); line-height: 1.6; font-weight: 600; overflow-wrap: anywhere; }
+.ck-cook__nav { display: flex; justify-content: space-between; gap: 0.6rem; margin-block-start: 1rem; }
+.ck-cook__nav .btn { min-block-size: 48px; flex: 1; }
+.ck-new { display: grid; grid-template-columns: minmax(0, 1fr) repeat(3, 4.2rem) auto; gap: 0.4rem; margin-block-end: 0.6rem; }
+@media (max-width: 520px) { .ck-new { grid-template-columns: repeat(3, 1fr); } .ck-new #ck-t-label, .ck-new #ck-t-add { grid-column: 1 / -1; } }
+.ck-timer { grid-template-columns: minmax(0, 1fr) auto; }
+.ck-timer > .cl-item__actions { grid-column: 1 / -1; justify-self: end; }
+.ck-remaining { font-size: 1.25rem; font-variant-numeric: tabular-nums; }
+.cl-room-bar { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin-block-end: 0.75rem; }
+
+/* ---- V6.1.1: layout spacing (root cause: every section sat in one plain #ck-body div, outside the
+   .page grid gap) — the body is now a grid with the page's own rhythm. Scoped to Recipes. */
+.ck-body { display: grid; gap: 1.25rem; min-inline-size: 0; }
+.ck-body > * { min-inline-size: 0; }
+#ck-form .form-section { display: grid; gap: 0.6rem; padding-block: 0.75rem; }
+#ck-form .form-section > legend { padding-inline: 0.35rem; font-weight: 700; }
+.ck-row { margin-block-end: 0; }
+.ck-steps > li { display: grid; gap: 0.4rem; }
+#ck-cook-timers, .ck-timers { display: grid; gap: 0.5rem; }
+/* search (always visible) + compact Filters disclosure */
+.ck-search { display: grid; gap: 0.5rem; }
+.ck-filters-bar { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+.ck-filters { display: flex; flex-wrap: wrap; gap: 0.6rem 1rem; align-items: center; padding: 0.75rem; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface); }
+.ck-filters[hidden] { display: none; }
+.ck-filters-count { margin-inline-start: 0.35rem; }
+/* ⋯ actions menu */
+.ck-menu { position: relative; }
+.ck-menu--card { position: absolute; inset-block-start: 0.4rem; inset-inline-start: 0.4rem; }
+.ck-menu__btn { min-inline-size: 44px; min-block-size: 44px; border-radius: 50%; border: 1px solid var(--border); background: var(--surface); color: var(--text); font-size: 1.25rem; line-height: 1; cursor: pointer; }
+.ck-menu--card .ck-menu__btn { background: rgba(0, 0, 0, 0.45); color: #fff; border-color: transparent; }
+.ck-menu__list { position: absolute; z-index: 20; inset-block-start: calc(100% + 0.25rem); inset-inline-start: 0; min-inline-size: 10rem; display: grid; padding: 0.3rem;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-md); box-shadow: var(--shadow-lg, 0 10px 30px rgba(0, 0, 0, 0.18)); }
+.ck-menu__list[hidden] { display: none; }
+.ck-menu__item { text-align: start; padding: 0.6rem 0.75rem; border: 0; border-radius: var(--radius-sm, 8px); background: none; color: var(--text); cursor: pointer; min-block-size: 44px; }
+.ck-menu__item:hover, .ck-menu__item:focus-visible { background: var(--surface-2); outline: none; }
+.ck-menu__item[data-action='menu-delete'] { color: var(--danger, #dc2626); }
+/* persistent alarm: gentle attention cue (2 s cycle; static outline when motion is reduced) */
+.ck-timer--ringing { border: 2px solid var(--danger, #dc2626); border-radius: var(--radius-md); animation: ck-attn 2s ease-in-out infinite; }
+.ck-timer--ringing .ck-remaining { color: var(--danger, #dc2626); }
+.ck-stop { font-weight: 800; }
+@keyframes ck-attn { 50% { box-shadow: 0 0 0 4px rgba(220, 38, 38, 0.25); } }
+@media (prefers-reduced-motion: reduce) { .ck-timer--ringing { animation: none; box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.3); } }
+/* V6.3 — Recipes AI import (tokens only; wraps on narrow screens; RTL-safe) */
+.ck-imp-card { display: grid; gap: 0.75rem; }
+.ck-imp-card .card__title { margin: 0; }
+.ck-imp-card textarea.input { inline-size: 100%; min-block-size: 8rem; resize: vertical; box-sizing: border-box; }
+.ck-imp-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+.ck-imp-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.6rem; }
+.ck-imp-item { display: grid; gap: 0.4rem; padding: 0.75rem; border-radius: var(--radius-md); background: var(--surface-2); border: 1px solid var(--border-strong); }
+.ck-imp-item--invalid { border-color: var(--danger-border); background: var(--danger-soft); }
+.ck-imp-item--duplicate { background: var(--warn-soft); }
+.ck-imp-item--imported { border-color: var(--success-border); background: var(--success-soft); }
+.ck-imp-issues { margin: 0; padding-inline-start: 1.2rem; font-size: 0.85rem; }
+.ck-imp-review summary { cursor: pointer; font-weight: 600; }
+.ck-imp-ings, .ck-imp-steps { margin: 0.35rem 0; padding-inline-start: 1.2rem; }
+.ck-imp-steps .pill { margin-inline-start: 0.4rem; }

@@ -1,0 +1,43 @@
+/* Life Savings & Zakat (Phase 5). Accent: amber. Logical properties + theme tokens only. */
+.sv-total { font-size: clamp(1.8rem, 4vw, 2.4rem); font-weight: 800; font-variant-numeric: tabular-nums; color: var(--acc); }
+[dir='rtl'] .sv-total { text-align: right; }
+
+/* Asset cards */
+.sv-asset { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 0.4rem 0.8rem; align-items: start; padding: 0.9rem; border-radius: var(--radius-lg); background: var(--surface); border: 1px solid var(--border); }
+.sv-asset--archived { opacity: 0.7; }
+.sv-asset__qty { font-size: 0.85rem; font-weight: 700; color: var(--text-2); font-variant-numeric: tabular-nums; }
+[dir='rtl'] .sv-asset__qty { text-align: right; }
+.sv-asset__side { display: grid; justify-items: end; gap: 0.3rem; }
+.sv-asset__actions { grid-column: 2 / -1; }
+@media (max-width: 560px) {
+  .sv-asset { grid-template-columns: auto minmax(0, 1fr); }
+  .sv-asset__side { grid-column: 2; justify-items: start; }
+  .sv-asset__actions { grid-column: 1 / -1; }
+}
+
+/* Price freshness — text always present; colour is a secondary cue. */
+.fresh--current, .fresh--live { color: var(--success); background: var(--success-soft); }
+.fresh--manual, .fresh--derived { color: var(--link); background: var(--info-soft); }
+.fresh--stale, .fresh--staleManual { color: var(--warn); background: var(--warn-soft); }
+.fresh--unavailable { color: var(--muted); background: var(--surface-2); }
+
+/* Allocation rows (household Zakat shares) */
+.alloc-row { display: grid; grid-template-columns: minmax(0, 1fr) 6rem auto; align-items: center; gap: 0.5rem; min-height: 44px; }
+.alloc-row .input { text-align: end; }
+
+/* Zakat */
+.zakat .zk-status { display: grid; gap: 0.5rem; border-inline-start: 4px solid var(--border-strong); }
+.zk-status--inProgress { border-inline-start-color: var(--acc); }
+.zk-status--complete { border-inline-start-color: var(--success); }
+.zk-status--belowNisab, .zk-status--unknown { border-inline-start-color: var(--muted); }
+.zk-status__label { font-size: 0.8rem; font-weight: 700; color: var(--muted); }
+.zk-status__text { font-size: 1.1rem; font-weight: 800; }
+.hijri { color: var(--muted); font-weight: 600; }
+.zk-table { inline-size: 100%; border-collapse: collapse; font-size: 0.88rem; }
+.zk-table th { text-align: start; font-size: 0.75rem; color: var(--muted); font-weight: 700; padding: 0.4rem 0.5rem; border-block-end: 1px solid var(--border); }
+.zk-table td { padding: 0.5rem; border-block-end: 1px solid var(--border); overflow-wrap: anywhere; }
+.zk-table .num, .zk-calc .num { font-variant-numeric: tabular-nums; text-align: end; white-space: nowrap; }
+.zk-calc { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0.35rem 1rem; margin-block-start: 0.75rem; padding: 0.8rem 0.9rem; border-radius: var(--radius-md); background: var(--surface-2); }
+.zk-calc__total { font-size: 1.15rem; font-weight: 800; color: var(--acc); }
+.zk-disclaimer { font-size: 0.8rem; color: var(--muted); max-inline-size: 70ch; }
+@media (max-width: 480px) { .zk-table th:nth-child(2), .zk-table td:nth-child(2) { display: none; } }

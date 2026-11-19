@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="ar" dir="rtl" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <!-- V6.1: iframes may load ONLY the YouTube player (privacy-enhanced + standard). No other directive: nothing else is restricted. -->
+  <meta http-equiv="Content-Security-Policy" content="frame-src https://www.youtube-nocookie.com https://www.youtube.com">
+  <meta name="theme-color" content="#f8fafc">
+  <meta name="description" content="HomeHub: one place for your household.">
+  <!-- V6.3: installable standalone app (see V630-REPORT.md · PWA). -->
+  <link rel="manifest" href="/manifest.webmanifest">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="HomeHub">
+  <link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+  <link rel="icon" type="image/png" sizes="192x192" href="/assets/icons/icon-192.png">
+  <title>HomeHub</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🏠</text></svg>">
+
+  <!-- Applies cached language/theme before first paint; plain script, no Firebase. -->
+  <script src="src/boot-prefs.js"></script>
+  <script src="src/pwa.js" defer></script>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800&family=Inter:wght@400;600;700;800&display=swap">
+
+  <link rel="stylesheet" href="assets/css/tokens.css">
+  <link rel="stylesheet" href="assets/css/base.css">
+  <link rel="stylesheet" href="assets/css/components.css">
+  <link rel="stylesheet" href="assets/css/layout.css">
+  <link rel="stylesheet" href="assets/css/modules/rooms.css">
+  <link rel="stylesheet" href="assets/css/modules/devices.css">
+  <link rel="stylesheet" href="assets/css/modules/finance.css">
+  <link rel="stylesheet" href="assets/css/modules/chef.css">
+  <link rel="stylesheet" href="assets/css/modules/calendar.css">
+  <link rel="stylesheet" href="assets/css/modules/savings.css">
+  <link rel="stylesheet" href="assets/css/modules/cleaning.css">
+  <link rel="stylesheet" href="assets/css/modules/family.css">
+
+  <script type="module" src="src/main.js"></script>
+</head>
+<body>
+  <!-- Replaced by the app as soon as src/main.js runs. Never a blank page. -->
+  <div id="app">
+    <main class="gate">
+      <div class="gate__card gate__card--center">
+        <div class="brand-mark brand-mark--lg" aria-hidden="true">🏠</div>
+        <h1 class="gate__title">HomeHub</h1>
+        <div class="spinner" aria-hidden="true"></div>
+        <p class="gate__status" id="boot-status" role="status"></p>
+      </div>
+    </main>
+  </div>
+  <noscript>
+    <p style="padding:1rem;text-align:center">HomeHub needs JavaScript. / يحتاج HomeHub إلى تفعيل JavaScript.</p>
+  </noscript>
+</body>
+</html>

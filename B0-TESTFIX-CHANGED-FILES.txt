@@ -1,0 +1,11 @@
+B0 test-only correction (v5.9.1) — changed files relative to HomeHub-V5.9.1-Phase5.6-full.zip
+
+MODIFIED
+tests/rules/rules.test.mjs
+
+ADDED
+B0-TESTFIX-CHANGED-FILES.txt
+B0-TESTFIX-REPORT.md
+
+UNCHANGED: all application code (src/**), firestore.rules, firestore.indexes.json, firebase.json,
+package.json (version stays 5.9.1), every other test file.

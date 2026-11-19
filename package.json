@@ -1,0 +1,19 @@
+{
+  "name": "homehub",
+  "version": "6.3.0.1",
+  "private": true,
+  "description": "HomeHub V5. Foundation + Rooms + Devices + Finance + Family & Members (no build step: native ES modules).",
+  "type": "module",
+  "scripts": {
+    "serve": "python3 -m http.server 5173",
+    "test": "node --test \"tests/unit/*.test.mjs\" \"tests/static/*.test.mjs\"",
+    "test:rules": "cd tests/rules && npm install && npx firebase emulators:exec --only firestore --project demo-homehub \"npm test\"",
+    "test:e2e": "node tests/e2e/run-e2e.mjs",
+    "test:rules:smoke": "node tests/rules-smoke/run.mjs",
+    "rules:compare": "node tools/rules-compare.mjs",
+    "rules:limits": "node tools/rules-limits.mjs",
+    "test:rules:strict": "node tools/run-strict.mjs",
+    "rules:cost": "node tools/rules-cost.mjs",
+    "diagnose:setup": "cd tests/rules && npm install && npx firebase emulators:exec --only firestore --project demo-homehub-diag \"node diagnose-setup.mjs\""
+  }
+}

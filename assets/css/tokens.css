@@ -1,0 +1,104 @@
+/* HomeHub design tokens. Palette carried over from the previous HomeHub: slate neutrals, blue→indigo brand. */
+:root {
+  --font-latin: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, Arial, sans-serif;
+  --font-arabic: 'Cairo', 'Segoe UI', Tahoma, 'Noto Sans Arabic', Arial, sans-serif;
+  --font: var(--font-latin);
+
+  --brand-1: #2563eb;           /* blue-600 */
+  --brand-2: #4f46e5;           /* indigo-600 */
+  --brand-3: #4338ca;           /* indigo-700 */
+  --brand-gradient: linear-gradient(135deg, var(--brand-1), var(--brand-2));
+  --hero-gradient: linear-gradient(135deg, #2563eb 0%, #4f46e5 60%, #4338ca 100%);
+
+  --bg: #f8fafc;                /* slate-50 */
+  --surface: #ffffff;
+  --surface-2: #f1f5f9;         /* slate-100 */
+  --surface-3: #e2e8f0;         /* slate-200 */
+  --border: #e2e8f0;
+  --border-strong: #cbd5e1;
+  --text: #0f172a;              /* slate-900 */
+  --text-2: #334155;            /* slate-700 */
+  --muted: #64748b;             /* slate-500 */
+  --focus: #3b82f6;
+  --link: #2563eb;
+
+  --danger: #e11d48;
+  --danger-soft: #fff1f2;
+  --danger-border: #fecdd3;
+  --success: #059669;
+  --success-soft: #ecfdf5;
+  --success-border: #a7f3d0;
+  --info-soft: #eff6ff;
+  --info-border: #bfdbfe;
+  --warn: #b45309;
+  --warn-soft: #fffbeb;
+
+  --radius-xl: 2rem;            /* cards (2rem, as before) */
+  --radius-lg: 1.5rem;
+  --radius-md: 1rem;            /* inputs, buttons */
+  --radius-sm: 0.75rem;
+  --radius-pill: 999px;
+
+  --shadow-card: 0 1px 2px rgba(15, 23, 42, 0.05);
+  --shadow-raised: 0 20px 50px -20px rgba(15, 23, 42, 0.28);
+  --shadow-brand: 0 12px 28px -12px rgba(37, 99, 235, 0.55);
+
+  --rail-w: 80px;
+  --topbar-h: 64px;
+  --dock-h: 68px;
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+
+[dir='rtl'] { --font: var(--font-arabic); }
+
+[data-theme='dark'] {
+  --bg: #020617;                /* slate-950 */
+  --surface: #0f172a;           /* slate-900 */
+  --surface-2: #1e293b;         /* slate-800 */
+  --surface-3: #334155;
+  --border: #1e293b;
+  --border-strong: #334155;
+  --text: #f1f5f9;
+  --text-2: #cbd5e1;
+  --muted: #94a3b8;
+  --link: #93c5fd;
+  --danger: #fb7185;
+  --danger-soft: rgba(127, 29, 29, 0.25);
+  --danger-border: rgba(248, 113, 113, 0.3);
+  --success: #34d399;
+  --success-soft: rgba(6, 78, 59, 0.3);
+  --success-border: rgba(52, 211, 153, 0.3);
+  --info-soft: rgba(30, 58, 138, 0.3);
+  --info-border: rgba(96, 165, 250, 0.3);
+  --warn: #fbbf24;
+  --warn-soft: rgba(120, 53, 15, 0.3);
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-raised: 0 20px 50px -20px rgba(0, 0, 0, 0.7);
+}
+
+/* Module accents: --acc (foreground) and --acc-soft (icon tile background). */
+.accent-blue    { --acc: #2563eb; --acc-soft: #dbeafe; }
+.accent-emerald { --acc: #059669; --acc-soft: #d1fae5; }
+.accent-orange  { --acc: #ea580c; --acc-soft: #ffedd5; }
+.accent-amber   { --acc: #d97706; --acc-soft: #fef3c7; }
+.accent-sky     { --acc: #0284c7; --acc-soft: #e0f2fe; }
+.accent-violet  { --acc: #7c3aed; --acc-soft: #ede9fe; }
+.accent-rose    { --acc: #e11d48; --acc-soft: #ffe4e6; }
+.accent-teal    { --acc: #0d9488; --acc-soft: #ccfbf1; }
+.accent-green   { --acc: #16a34a; --acc-soft: #dcfce7; }
+.accent-indigo  { --acc: #4f46e5; --acc-soft: #e0e7ff; }
+.accent-cyan    { --acc: #0891b2; --acc-soft: #cffafe; }
+
+[data-theme='dark'] .accent-blue    { --acc: #93c5fd; --acc-soft: rgba(30, 64, 175, 0.35); }
+[data-theme='dark'] .accent-emerald { --acc: #6ee7b7; --acc-soft: rgba(6, 95, 70, 0.4); }
+[data-theme='dark'] .accent-orange  { --acc: #fdba74; --acc-soft: rgba(124, 45, 18, 0.4); }
+[data-theme='dark'] .accent-amber   { --acc: #fcd34d; --acc-soft: rgba(120, 53, 15, 0.4); }
+[data-theme='dark'] .accent-sky     { --acc: #7dd3fc; --acc-soft: rgba(7, 89, 133, 0.4); }
+[data-theme='dark'] .accent-violet  { --acc: #c4b5fd; --acc-soft: rgba(91, 33, 182, 0.35); }
+[data-theme='dark'] .accent-rose    { --acc: #fda4af; --acc-soft: rgba(136, 19, 55, 0.4); }
+[data-theme='dark'] .accent-teal    { --acc: #5eead4; --acc-soft: rgba(17, 94, 89, 0.4); }
+[data-theme='dark'] .accent-green   { --acc: #86efac; --acc-soft: rgba(20, 83, 45, 0.4); }
+[data-theme='dark'] .accent-indigo  { --acc: #a5b4fc; --acc-soft: rgba(55, 48, 163, 0.4); }
+[data-theme='dark'] .accent-cyan    { --acc: #67e8f9; --acc-soft: rgba(21, 94, 117, 0.4); }

@@ -1,0 +1,69 @@
+/* Home Routine & Cleaning (Phase 5.3) — logical properties + theme tokens; mobile-first. */
+.cl-progress { display: grid; gap: 0.4rem; margin-block: 0.5rem 1rem; }
+.cl-progress__text { margin: 0; font-weight: 600; }
+.cl-progress__bar { block-size: 0.5rem; border-radius: 999px; background: var(--surface-2); overflow: hidden; }
+.cl-progress__bar > span { display: block; block-size: 100%; background: var(--link); border-radius: inherit; transition: inline-size 0.3s; }
+.view-switch--scroll { overflow-x: auto; flex-wrap: nowrap; scrollbar-width: thin; }
+.view-switch--scroll .view-switch__btn { white-space: nowrap; }
+.cl-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.6rem; }
+.cl-item { display: flex; flex-wrap: wrap; gap: 0.6rem; justify-content: space-between; align-items: flex-start;
+  padding: 0.8rem 0.9rem; border: 1px solid var(--border); border-radius: var(--radius, 12px); background: var(--surface); }
+.cl-item--high { border-inline-start: 4px solid var(--warn, #d97706); }
+.cl-item--done { opacity: 0.8; }
+.cl-item--done .cl-item__title { text-decoration: line-through; text-decoration-thickness: 1px; }
+.cl-item--archived { opacity: 0.65; }
+.cl-item__main { flex: 1 1 14rem; min-inline-size: 0; }
+.cl-item__title { margin: 0; font-weight: 600; display: flex; gap: 0.4rem; align-items: center; flex-wrap: wrap; overflow-wrap: anywhere; }
+.cl-item__meta, .cl-item__missed, .cl-item__notes { margin: 0.2rem 0 0; font-size: 0.85rem; color: var(--text-2); }
+.cl-item__missed { color: var(--warn, #b45309); }
+.cl-item__instructions summary { cursor: pointer; font-size: 0.85rem; color: var(--link); }
+.cl-item__actions { display: flex; gap: 0.4rem; flex-wrap: wrap; }
+.cl-item__actions .btn { min-block-size: 2.5rem; }
+@media (max-width: 480px) { .cl-item__actions { inline-size: 100%; } .cl-item__actions .btn { flex: 1 1 auto; } }
+
+/* Phase 5.3 — mobile dock "More" (keeps every module reachable when there are > 4 destinations). */
+.dock__more { position: relative; display: flex; }
+.dock__more > .nav-link { background: none; border: 0; font: inherit; color: inherit; cursor: pointer; }
+.dock-more { position: absolute; inset-block-end: calc(100% + 0.5rem); inset-inline-end: 0; min-inline-size: 12rem; padding: 0.4rem;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius, 12px); box-shadow: 0 8px 24px rgba(0,0,0,.18); z-index: 30; }
+.dock-more__item { display: flex; gap: 0.6rem; align-items: center; padding: 0.6rem 0.7rem; border-radius: 8px; color: inherit; text-decoration: none; }
+.dock-more__item:hover, .dock-more__item.is-active { background: var(--surface-2); }
+
+/* Phase 5.3.1 — template setup review (reuses .banner / .fin-check; only grouping added). */
+.cl-setup { display: flex; flex-wrap: wrap; gap: 0.6rem; align-items: center; justify-content: space-between; margin-block-end: 0.8rem; }
+.cl-setup p { margin: 0; flex: 1 1 14rem; }
+.cl-setup__group { border-block-start: 1px solid var(--border); padding-block: 0.6rem; }
+.cl-setup__title { margin: 0 0 0.4rem; font-size: 0.95rem; }
+.cl-setup__list { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.3rem; }
+.cl-setup__progress { margin: 0.4rem 0; font-weight: 600; }
+
+/* Phase 5.4a — Advanced Cleaning (reuses cards, buttons, progress; only small additions). */
+.page-head__actions { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; }
+.cl-chips { display: flex; gap: 0.4rem; flex-wrap: wrap; margin-block: 0.6rem; }
+.cl-item--skipped, .cl-item--postponed { opacity: 0.75; }
+.cl-room { border: 1px solid var(--border); border-radius: var(--radius, 12px); background: var(--surface); overflow: hidden; }
+.cl-room__head { inline-size: 100%; display: flex; justify-content: space-between; gap: 0.6rem; padding: 0.8rem 0.9rem; background: none; border: 0; color: inherit; font: inherit; cursor: pointer; text-align: start; }
+.cl-room__body { padding: 0 0.9rem 0.9rem; display: grid; gap: 0.6rem; }
+.cl-stat-list { margin: 0; padding-inline-start: 1.1rem; }
+
+/* V6.3 — AI Import: separated cards, one option grid, wrapping action rows (tokens only; RTL-safe) */
+.cl-ai { display: grid; gap: 1rem; }
+.cl-ai__card { display: grid; gap: 0.85rem; margin: 0; }
+.cl-ai__card > .card__title { margin: 0; }
+.cl-ai__grid { display: grid; gap: 0.75rem; grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr)); }
+.cl-ai__set { border: 0; padding: 0; margin: 0; min-inline-size: 0; }
+.cl-ai__checks { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.cl-ai__actions { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; justify-content: flex-start; }
+.cl-ai textarea.input { inline-size: 100%; min-block-size: 8rem; resize: vertical; box-sizing: border-box; }
+/* V6.3 — Mark All Done row, task-only resets, Tasks tab */
+.cl-markall { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; margin-block: 0.5rem; }
+.cl-markall .cl-setup__progress { margin: 0; }
+.cl-reset { display: grid; gap: 0.75rem; }
+.cl-reset__item { display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: center; justify-content: space-between; padding: 0.75rem; border-radius: var(--radius-md); background: var(--surface-2); }
+.cl-reset__item > div { flex: 1 1 14rem; min-inline-size: 0; }
+.cl-reset__item p { margin: 0.25rem 0 0; }
+.cl-tasks__actions { display: flex; justify-content: flex-end; margin-block: 0.5rem; }
+
+/* V6.3: tasks due after the day's plan was saved (shown under the routine) */
+.cl-adv-extra { margin-top: var(--space-4, 1rem); }
+.cl-adv-extra__title { font-size: 0.95rem; font-weight: 700; margin: 0 0 var(--space-2, 0.5rem); color: var(--text-2); }

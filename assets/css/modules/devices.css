@@ -1,0 +1,53 @@
+/* Devices module (Phase 3). Accent: cyan. Logical properties only (RTL-safe). */
+
+/* Toolbar: search + filters */
+.toolbar { display: grid; gap: 0.75rem; padding: 0.9rem; border-radius: var(--radius-lg); background: var(--surface); border: 1px solid var(--border); }
+.toolbar[hidden] { display: none; }
+.toolbar__search { position: relative; display: flex; align-items: center; }
+.toolbar__search svg { position: absolute; inset-inline-start: 0.85rem; color: var(--muted); pointer-events: none; }
+.toolbar__search .input { padding-inline-start: 2.6rem; }
+.toolbar__filters { display: grid; gap: 0.6rem; grid-template-columns: repeat(auto-fill, minmax(min(100%, 135px), 1fr)); }
+.toolbar__slot { display: contents; }
+.toolbar__field { display: grid; gap: 0.25rem; min-width: 0; }
+.toolbar__label { font-size: 0.72rem; font-weight: 700; color: var(--muted); }
+.input--sm { min-height: 40px; padding-block: 0.45rem; font-size: 0.88rem; }
+.result-info { font-size: 0.82rem; color: var(--muted); }
+.result-info:empty { display: none; }
+.empty-state--compact { padding: 1.75rem 1.25rem; }
+
+/* Device cards (reuse room-card structure) */
+.device-card .room-card__main { grid-template-columns: auto 1fr; grid-template-areas: 'icon text' 'icon status'; row-gap: 0.4rem; }
+.device-card .room-card__icon { grid-area: icon; align-self: start; }
+.device-card .room-card__text { grid-area: text; }
+.device-card .status-pill { grid-area: status; justify-self: start; }
+.device-card__room { display: inline-flex; align-items: flex-start; gap: 0.3rem; font-size: 0.8rem; color: var(--text-2); min-width: 0; }
+.device-card__room svg { margin-top: 0.15rem; }
+.device-card__room span { overflow-wrap: anywhere; }
+
+/* Status: calm, never alarming. Text label always present (colour is not the only cue). */
+.status-pill { display: inline-flex; align-items: center; gap: 0.35rem; width: fit-content; padding: 0.15rem 0.6rem; border-radius: var(--radius-pill); font-size: 0.74rem; font-weight: 700; background: var(--surface-2); color: var(--text-2); }
+.status-pill::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: currentColor; opacity: 0.85; }
+.status-pill--operational { color: var(--success); background: var(--success-soft); }
+.status-pill--needs_attention { color: var(--warn); background: var(--warn-soft); }
+.status-pill--out_of_service { color: var(--muted); background: var(--surface-2); }
+.status-pill--stored { color: var(--muted); background: var(--surface-2); }
+.status-pill--stored::before { border-radius: 2px; }
+.room-detail .status-pill { margin-top: 0.35rem; margin-inline-end: 0.35rem; }
+
+/* Form sections (progressive disclosure) */
+.form-section__title { font-size: 0.8rem; font-weight: 800; color: var(--muted); }
+.form-section { border: 1px solid var(--border); border-radius: var(--radius-md); padding: 0 0.9rem; }
+.form-section[open] { padding-bottom: 0.9rem; }
+.form-section > * + * { margin-top: 0.9rem; }
+.form-section__summary { padding: 0.8rem 0; font-weight: 700; cursor: pointer; list-style: none; display: flex; justify-content: space-between; }
+.form-section__summary::-webkit-details-marker { display: none; }
+.form-section__summary::after { content: '+'; color: var(--muted); font-weight: 800; }
+.form-section[open] > .form-section__summary::after { content: '−'; }
+.form-grid--tight { gap: 0.75rem; grid-template-columns: repeat(auto-fill, minmax(min(100%, 200px), 1fr)); }
+input[type='date'].input { min-height: 46px; }
+
+.link-like { border: 0; background: none; padding: 0; cursor: pointer; font: inherit; font-weight: 700; color: var(--link); text-align: start; }
+.link-like:hover { text-decoration: underline; }
+.room-devices { grid-template-columns: auto 1fr auto; }
+
+.summary-card__extra--attention { color: var(--warn); font-weight: 700; }

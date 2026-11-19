@@ -1,0 +1,53 @@
+{
+  "schemaVersion": 1,
+  "packageType": "homehub-cleaning-plan",
+  "metadata": {
+    "name": "Sample plan",
+    "language": "ar"
+  },
+  "tasks": [
+    {
+      "title": "مسح سطح المطبخ",
+      "titleEn": "Wipe the kitchen counter",
+      "areaType": "kitchen",
+      "frequency": {
+        "type": "daily"
+      },
+      "estimatedMinutes": 5,
+      "priority": "normal"
+    },
+    {
+      "title": "تنظيف سلة القلاية",
+      "titleEn": "Clean the air-fryer basket",
+      "deviceType": "airfryer",
+      "triggerType": "afterUse",
+      "estimatedMinutes": 5,
+      "priority": "normal"
+    },
+    {
+      "title": "تغيير ملاءات السرير",
+      "titleEn": "Change the bed sheets",
+      "areaType": "bedroom",
+      "frequency": {
+        "type": "weekly",
+        "weekday": 5
+      },
+      "estimatedMinutes": 15,
+      "priority": "normal"
+    }
+  ],
+  "templates": [
+    {
+      "pack": "Monthly",
+      "title": "تنظيف الحمام بعمق",
+      "titleEn": "Deep-clean the bathroom",
+      "areaType": "bathroom",
+      "frequency": {
+        "type": "monthly",
+        "day": 1
+      },
+      "estimatedMinutes": 45,
+      "priority": "high"
+    }
+  ]
+}

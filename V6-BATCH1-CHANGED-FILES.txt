@@ -1,0 +1,27 @@
+V6 Finance batch 1 (6.0.0-batch.1) — vs the B0-corrected V5.9.1 baseline
+
+ADDED
+V6-BATCH1-CHANGED-FILES.txt
+V6-BATCH1-REPORT.md
+src/modules/expenses/finance-v6.js
+src/modules/expenses/tab-household.js
+tests/unit/finance-v6-store.test.mjs
+tests/unit/finance-v6.test.mjs
+
+MODIFIED
+firestore.rules
+package.json
+src/config/app-config.js
+src/core/i18n/locales/ar.js
+src/core/i18n/locales/en.js
+src/modules/expenses/collections.js
+src/modules/expenses/finance-repository.js
+src/modules/expenses/finance-store.js
+src/modules/expenses/page.js
+tests/e2e/run-e2e.mjs
+tests/rules/rules.test.mjs
+tests/static/finance-static.test.mjs
+tests/unit/finance-store.test.mjs
+
+REMOVED
+(none)
