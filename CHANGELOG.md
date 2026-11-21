@@ -1,5 +1,15 @@
 # Changelog
 
+## 6.4.1-a — V6.4.1 Stage A: Contacts UI and AI JSON (November 2026) — NOT DEPLOYED, awaiting review
+
+- **Contacts list:** Import .vcf, Export .vcf, AI JSON, Manage categories and Recently deleted moved into a ⋮ menu (list only, permission-gated, keyboard and screen-reader accessible). A full-width **New contact** button sits right above the list. Category and Favourites stay side by side down to 320 px (the Favourites label collapses to the star below 380 px).
+- **Tiles:** Call and WhatsApp buttons on every tile that has a usable number; they never open the details. Several numbers → a chooser (never guessed); a national number still asks for a country code on WhatsApp. WhatsApp uses green styling and an asset slot for the official icon (`assets/brand/whatsapp.svg`, supplied by the household; neutral "WA" badge otherwise). The dialer explanation note is removed.
+- **Details:** a prominent **Back to Contacts** button; Edit, Export .vcf and Delete moved into the details ⋮ menu.
+- **Back behaviour:** details and every management view are one history entry on the same URL, so the on-screen Back, the browser Back and Android Back return exactly one step to the list with its search, category, Favourites filter and scroll position. Works together with the menu viewer; deleting a contact returns one step.
+- **AI JSON import / export** (`homehub.contacts` v1): copy an AI prompt or the JSON schema, download an example, export all / filtered / favourites / a category / picked contacts (warning first, no ids or audit data), import by paste or file with a full preview (invalid file rejected whole; invalid items excluded and explained; duplicates skipped by default; explicit merge with per-field "use the file's value" choices; pictures and menus never overwritten unless ticked). Categories keep their identity across English and Arabic files.
+- **Rules:** contacts `source` accepts `json` (requires `contacts.import`; validated media allowed). Contacts create cost 1053 (budget 1100). No new collection, no migration.
+- The upcoming-events panel stays hidden until Stage B.
+
 ## 6.4.0-c — V6.4 Batch C: contact pictures and restaurant menus, Revision 2 (November 2026) — NOT DEPLOYED, awaiting review
 
 - **Contact pictures:**

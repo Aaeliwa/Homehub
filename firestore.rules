@@ -2530,10 +2530,12 @@ service cloud.firestore {
           && contactContentOk(incoming()) && incoming().deleted == false && incoming().deletedAt == null && incoming().deletedBy == null
           && incoming().rev == 1 && incoming().createdBy == request.auth.uid && stampedNow('createdAt') && stampedBy() && incoming().schemaVersion == 1
           // a .vcf import needs contacts.import; a manual add needs contacts.create
-          // (V6.4 C: an import never carries media — .vcf PHOTO etc. are skipped, nothing external is fetched)
-          && (incoming().source == 'vcf'
-                ? (!('avatarUrl' in incoming()) && !('menus' in incoming()) && can(h, 'contacts', 'import'))
-                : (incoming().source == 'manual' && can(h, 'contacts', 'create')));
+          // V6.4 C: a .vcf import never carries media (PHOTO etc. are skipped, nothing external is fetched).
+          // V6.4.1: an AI JSON import (source 'json', contacts.import) may carry media — validated above by
+          // contactContentOk → contactMediaOk exactly like a manual contact.
+          && (incoming().source == 'manual' ? can(h, 'contacts', 'create')
+              : (incoming().source in ['vcf', 'json'] && can(h, 'contacts', 'import')
+                 && (incoming().source == 'json' || (!('avatarUrl' in incoming()) && !('menus' in incoming())))));
         // Every change is one revision (stale edits / merges are refused), stamped by the caller; createdBy,
         // createdAt, source and schemaVersion are immutable. Delete / restore = contacts.delete only.
         allow update: if incoming().rev == resource.data.rev + 1 && stampedBy()

@@ -173,9 +173,11 @@ export const CONTENT_FIELDS = Object.freeze(['name', 'organization', 'email', 'a
 export const MEDIA_FIELDS = Object.freeze(['avatarUrl', 'menus']);
 export function createDoc(value, { uid, now, source = 'manual' }) {
   const v = { ...value };
-  // an empty picture / menu list is simply not stored; imports never carry media (rules refuse it)
-  if (source !== 'manual' || !v.avatarUrl) delete v.avatarUrl;
-  if (source !== 'manual' || !Array.isArray(v.menus) || !v.menus.length) delete v.menus;
+  // an empty picture / menu list is simply not stored; .vcf imports never carry media (rules refuse it)
+  // V6.4.1: AI JSON imports may carry VALIDATED media (rules: source 'json'); .vcf imports never do
+  const media = source === 'manual' || source === 'json';
+  if (!media || !v.avatarUrl) delete v.avatarUrl;
+  if (!media || !Array.isArray(v.menus) || !v.menus.length) delete v.menus;
   return { ...v, source, deleted: false, deletedAt: null, deletedBy: null, rev: 1, createdBy: uid, createdAt: now, updatedBy: uid, updatedAt: now, schemaVersion: 1 };
 }
 /** Field-level patch (only what changed) + rev + stamp; null when nothing changed. */
@@ -271,7 +273,7 @@ export function classifyOccupied(existing, value) {
   if (existing === 'hidden') return 'hidden';
   if (!existing) return null;                                   // nothing there: the create failed for another reason
   if (existing.deleted === true) return 'deleted';
-  return existing.source === 'vcf' && sameContent(existing, value) ? 'already' : 'kept';
+  return (existing.source === 'vcf' || existing.source === 'json') && sameContent(existing, value) ? 'already' : 'kept';
 }
 /** Same record → same id on every device / retry; `copy` separates intentional copies (Keep separate only). */
 export const importId = (value, copy = 0) => `vc_${fnv64(`${fold(value.name)}|${phonesOf(value).map((p) => matchKey(p.number)).sort().join(',')}#${copy}`)}`;

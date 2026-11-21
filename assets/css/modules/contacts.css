@@ -1,10 +1,12 @@
 /* Shared Contacts (V6.4 Batch B). Theme tokens + logical properties only (RTL / dark safe). */
 .ct-body, .ct-stack { display: grid; gap: 1rem; min-inline-size: 0; }
 @media (min-width: 1024px) { .ct-body { gap: 1.25rem; } }
-.ct-head__actions { flex-wrap: wrap; }
 .ct-toolbar { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
 .ct-toolbar #ct-search { flex: 1 1 14rem; min-inline-size: 0; }
-.ct-toolbar select { flex: 0 1 12rem; min-inline-size: 0; }
+/* V6.4.1: category + Favourites always share one row (no wrap, no overflow); the select truncates */
+.ct-filters { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0.5rem; align-items: center; flex: 1 1 18rem; min-inline-size: 0; }
+.ct-filters__cat { min-inline-size: 0; inline-size: 100%; text-overflow: ellipsis; white-space: nowrap; overflow: hidden; min-block-size: 44px; }
+.ct-favfilter { min-block-size: 44px; white-space: nowrap; }
 .ct-favfilter.is-on { background: var(--warn-soft); color: var(--warn); border-color: color-mix(in srgb, var(--warn) 40%, var(--border)); }
 .ct-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.6rem; grid-template-columns: repeat(auto-fill, minmax(min(100%, 19rem), 1fr)); }
 .ct-card { display: flex; align-items: flex-start; gap: 0.25rem; min-inline-size: 0; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface); }
@@ -60,8 +62,8 @@
 @media (max-width: 480px) {
   .ct-phone__actions { inline-size: 100%; }
   .ct-phone__actions .btn { flex: 1 1 auto; }
-  .ct-head__actions .btn { flex: 1 1 auto; }
 }
+@media (max-width: 380px) { .ct-favfilter__text { display: none; } .ct-favfilter { min-inline-size: 44px; } }   /* accessible name stays (aria-label) */
 .ct-warn { color: var(--warn); font-weight: 600; }
 
 /* ---------------------------------------------------------------- V6.4 Batch C: pictures + restaurant menus */
@@ -112,3 +114,43 @@ html.ct-viewer-open, html.ct-viewer-open body { overflow: hidden; }
 .ct-viewer__nav { display: flex; justify-content: space-between; padding: 0.25rem 0.75rem; }
 .ct-viewer__hint { margin: 0; padding: 0 0.75rem 0.6rem; font-size: 0.78rem; opacity: 0.75; text-align: center; }
 @media (prefers-reduced-motion: reduce) { .ct-viewer__img { transition: none; } }
+
+/* ---------------------------------------------------------------- V6.4.1 Stage A: menus, tiles, details, AI JSON */
+.ct-head { align-items: flex-start; flex-wrap: nowrap; }            /* the ⋮ stays at the inline end on every width (never wraps under the title) */
+.ct-head__text { flex: 1 1 auto; min-inline-size: 0; }
+.ct-more { position: relative; flex: 0 0 auto; }
+.ct-more__btn { display: grid; place-items: center; inline-size: 44px; block-size: 44px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface); color: var(--text); font-size: 1.4rem; font-weight: 800; line-height: 1; cursor: pointer; }
+.ct-more__btn:hover, .ct-more__btn[aria-expanded='true'] { background: var(--surface-2); }
+.ct-more__btn:focus-visible, .ct-more__item:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; }
+.ct-more__list { position: absolute; inset-block-start: calc(100% + 0.35rem); inset-inline-end: 0; z-index: 30; min-inline-size: 15rem; max-inline-size: min(20rem, calc(100vw - 2rem));
+  display: grid; padding: 0.35rem; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface); box-shadow: var(--shadow-raised); }
+.ct-more__item { min-block-size: 44px; padding: 0.55rem 0.8rem; border: 0; border-radius: var(--radius-sm); background: none; color: var(--text); font: inherit; font-weight: 600; text-align: start; cursor: pointer; }
+.ct-more__item:hover, .ct-more__item:focus { background: var(--surface-2); }
+.ct-more__item[aria-disabled='true'] { color: var(--muted); cursor: not-allowed; }
+.ct-more__item--danger { color: var(--danger); }
+.ct-new { inline-size: 100%; min-block-size: 48px; justify-content: center; }
+.ct-card { align-items: center; cursor: pointer; }
+.ct-card__acts { flex: 0 0 auto; display: flex; align-items: center; gap: 0.15rem; padding-inline-end: 0.25rem; }
+.ct-card__acts .ct-fav { margin: 0; }
+.ct-act { display: inline-grid; place-items: center; inline-size: 44px; block-size: 44px; padding: 0; border: 1px solid transparent; border-radius: 999px; cursor: pointer; text-decoration: none; }
+.ct-act:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; }
+.ct-act--call { background: var(--surface-2); color: var(--link); border-color: var(--border); }
+.ct-act--wa { background: #1fa855; color: #fff; }                 /* WhatsApp green; white glyph ≥ 3:1 (WCAG 1.4.11 non-text); the button's name is its aria-label */
+.ct-act--wa:hover { background: #178a45; }
+.ct-act--lg { inline-size: 44px; block-size: 44px; }
+.ct-wa-ico { display: inline-grid; place-items: center; inline-size: 24px; block-size: 24px; background: center / contain no-repeat; }
+.ct-wa-ico__fallback { font-size: 0.72rem; font-weight: 900; letter-spacing: 0.02em; color: #fff; }
+html[data-wa-icon='ok'] .ct-wa-ico { background-image: url('../../brand/whatsapp.svg'); }
+html[data-wa-icon='ok'] .ct-wa-ico__fallback { display: none; }
+.ct-callbtn { display: inline-flex; align-items: center; gap: 0.35rem; }
+.ct-backbtn { display: inline-flex; align-items: center; gap: 0.4rem; min-block-size: 44px; padding-inline: 0.9rem 1.1rem; font-weight: 800; }
+[dir='rtl'] .ct-backbtn svg { transform: scaleX(-1); }
+.ct-detail__head { flex-wrap: wrap; }
+.ct-detail__tools { display: flex; align-items: center; gap: 0.25rem; margin-inline-start: auto; }
+.ct-choose { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.5rem; }
+.ct-choose__opt { inline-size: 100%; min-block-size: 48px; display: flex; justify-content: space-between; gap: 0.75rem; text-decoration: none; }
+.ct-choose__label { font-weight: 700; }
+.ct-json-text { min-block-size: 10rem; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.82rem; }
+.ct-json-pick { display: grid; gap: 0.25rem; max-block-size: 16rem; overflow: auto; border: 1px solid var(--border); border-radius: var(--radius-md); padding: 0.5rem 0.75rem; margin: 0; }
+.ct-take { display: grid; gap: 0.3rem; border: 1px dashed var(--border); border-radius: var(--radius-md); padding: 0.5rem 0.75rem; margin: 0; }
+.ct-take label { overflow-wrap: anywhere; }

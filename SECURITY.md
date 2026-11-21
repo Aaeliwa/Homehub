@@ -411,6 +411,25 @@ All rows (plus the Rooms cases) are covered by `tests/rules/rules.test.mjs` (55 
 - **Service worker:** network-only and same-origin navigations only. Cross-origin pictures and menus bypass it and are never cached (static test).
 - **Older clients (6.4.0-b):** they write only field-level patches of the Batch B fields, soft delete and restore, so they cannot remove `avatarUrl` or `menus`. Rules emulator test `V64C-3` replays those writes. The new client compares media only when the edit form carries it, treating absent, `null` and `[]` as equal, so a no-op save writes nothing.
 
+## V6.4.1 Stage A: Contacts UI and AI JSON import / export
+
+| Action | Owner | Admin | Member | Viewer | Child | Non-member / other Home |
+|---|---|---|---|---|---|---|
+| Open the ⋮ management menu (shown only when at least one item is allowed) | ✓ | ✓ | ✓ (Import / Export / AI JSON) | ✗ | ✗ | ✗ |
+| AI JSON export (`contacts.export`, client-side, warning first) | ✓ | ✓ | ✓ | ✗ | ✗ | ✗ |
+| AI JSON import (`contacts.import`; rules: `source: 'json'`) | ✓ | ✓ | ✓ | ✗ | ✗ | ✗ |
+| Import media through AI JSON (validated like a manual add) | ✓ | ✓ | ✓ | ✗ | ✗ | ✗ |
+| Replace an existing picture / menus through a JSON merge | only when ticked per contact (`contacts.edit`, `rev + 1`) | same | same | ✗ | ✗ | ✗ |
+| Tile Call / WhatsApp (`contacts.view`) | ✓ | ✓ | ✓ | ✓ | ✓ | ✗ |
+
+- **No AI service is called.** "Copy AI prompt", "Copy schema" and the example file are local text; the user pastes them into a tool of their choice. Nothing leaves the device unless the user does that. The export warning says the file holds personal information.
+- **Parsing is defensive:** ≤ 1 MB, UTF-8 only, nesting ≤ 6 checked before `JSON.parse`, ≤ 500 items, the top level must be exactly `{ schema, version, items }` with the known schema and version — anything else rejects the WHOLE file. Items are read key by key from an allow-list (own properties, nothing spread), so `__proto__` / `constructor` / `id` / `createdBy` and any other key make that item invalid (named in the preview); invalid items are excluded, valid ones can still be imported.
+- **Same validators and pipeline as .vcf:** every item passes `validateContact` and the contact-media URL checks, then the .vcf duplicate detection, deterministic ids (`vc_…`, create-only, a retry never duplicates), capacity limits and the store's occupied-id classification. Duplicates are skipped by default.
+- **No silent overwrite:** a merge keeps every existing value; it only fills empty fields, adds new numbers and unites categories. A conflicting name / organization / e-mail / address / notes / picture / menu list is replaced only when the user ticks that field for that contact. Media are never deleted by an import.
+- **Rules:** `source: 'json'` requires `contacts.import`; `source: 'vcf'` still may not carry `avatarUrl` / `menus`; the source is immutable.
+- **Navigation:** the in-page history markers are validated on every `popstate` (sub-view allow-list, id pattern, permission check); a forged entry for a view the role may not open falls back to the list.
+- **WhatsApp icon:** HomeHub does not draw the WhatsApp logo. The official SVG from WhatsApp's brand resources can be placed at `assets/brand/whatsapp.svg` (same origin); until then a neutral green "WA" badge is shown. The button's accessible name names the contact and number.
+
 ### Limits of the external-URL checks (V6.4 Batch C revision 2)
 
 The URL checks are **syntactic and best-effort**. HomeHub has no server, proxy or Cloud Function (Spark plan), so it **cannot**:

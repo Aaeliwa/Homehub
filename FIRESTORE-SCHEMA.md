@@ -492,7 +492,7 @@ None needed in Phases 1–4 (`firestore.indexes.json` is empty). Rooms and devic
 - `phones`: ≤ 10 strings `"label|number"` — label 1–30 (no `|` / control characters; `mobile` `home` `work` `whatsapp` `fax` `other` or custom), number ≤ 40 of `+ 0-9 ( ) space . / # * -`;
 - `categoryIds`: ≤ 10 unique category ids (ids of removed categories are ignored on display and dropped on the next save);
 - `favorite` (bool, **shared** by the household);
-- `source` (`manual` | `vcf`, immutable);
+- `source` (`manual` | `vcf` | `json`, immutable; `json` = AI JSON import, V6.4.1 Stage A);
 - `deleted` (bool), `deletedAt`, `deletedBy` (soft delete);
 - `rev` (starts at 1, every change is exactly + 1);
 - `createdBy`, `createdAt`, `updatedBy`, `updatedAt`, `schemaVersion` 1.
@@ -534,5 +534,12 @@ Two OPTIONAL keys on `homes/{h}/contacts/{contactId}`. Contacts written before 6
   - Removing the category or un-assigning it hides the section; `menus` is kept.
   - Re-adding the suggested category, or re-assigning it, shows the section again.
 - **Imports and merges:** a `.vcf` import never creates media keys; the rules refuse `avatarUrl` or `menus` on `source: 'vcf'` creates. A merge never touches them.
+- **AI JSON imports (V6.4.1 Stage A):** a create with `source: 'json'` (permission `contacts.import`) MAY carry `avatarUrl` / `menus`, validated by exactly the same per-field and per-element rules as a manual create. A JSON merge is an ordinary `contacts.edit` update (`rev + 1`); it carries a media key only when the contact has none (fill) or the user explicitly ticked "use the file's picture / menus" for that contact.
 - **Edits:** media changes are ordinary content edits: `contacts.edit`, `rev + 1`, stamped by the caller.
 - **Export:** vCard export intentionally excludes `avatarUrl` and `menus` (no `PHOTO`, `LOGO`, `URL` or custom menu lines). Export compatibility with 6.4.0-b is unchanged.
+
+### V6.4.1 Stage A: Contacts UI and AI JSON (no new collection, no migration)
+
+- Only change to stored data: `contacts.source` accepts `json` in addition to `manual` / `vcf` (rules contacts create cost 1053, budget 1100). Existing documents are untouched.
+- The portable JSON file (`{ "schema": "homehub.contacts", "version": 1, "items": [...] }`) exists only on the user's device; it contains no ids, audit fields, timestamps, household identifiers, roles, deleted contacts or Calendar data. Categories travel by NAME: suggested categories are recognised in English or Arabic and map back to the same `s_<key>` id; custom categories match by name; unknown names are reported and never created.
+- In-page Contacts navigation uses `history.state` markers on the same URL (`ctNav`, `ctList`) — nothing is persisted.

@@ -3777,6 +3777,12 @@ await check('V640-A Batch A: post-reset routine has no "no longer active" rows (
 // B0 regression (must stay LAST on the main page: it freezes the browser clock). Advanced must wait for
 // the stored settings before choosing the routine day, and must never pair / create a routine for a
 // different day than the one it shows (race found while closing B0; see B0-CLOSURE-REPORT.md).
+// V6.4.1 Stage A: Contacts management actions live in "⋮" menus — open the owning menu, then the item
+async function ctAct(p, sel) {
+  const el = p.locator(sel);
+  if (!(await el.isVisible())) await p.locator(`.ct-more:has(${sel}) .ct-more__btn`).click();
+  await el.click();
+}
 // =================================================================== V6.4 Batch B — Shared Contacts
 await check('V640-B Contacts: dock + Tools entry · add (Arabic, labelled phones, category) · search (Arabic / any number format) · tel: + WhatsApp (asks country code) · edit rev + favourite filter · VCF 2.1/3.0/4.0 import preview (new / duplicate / in-file / invalid; skip default; merge) · failure + retry without duplicates · export warning + VCF 3.0 CRLF · delete / restore · viewer read-only · 320–412, RTL, dark · rev 2: imported-before status, re-import after delete (not restored, explicit separate), capacity + truncation', async () => {
   await ensureSignedOut();
@@ -3809,7 +3815,7 @@ await check('V640-B Contacts: dock + Tools entry · add (Arabic, labelled phones
   assert.match(await page.locator('#ct-count').innerText(), /1 of 1/);
 
   // ---- categories: suggested set (idempotent)
-  await page.click('#ct-cats'); await page.click('#ct-cat-suggest'); await page.locator('#ct-cat-list li').nth(9).waitFor();
+  await ctAct(page, '#ct-cats'); await page.click('#ct-cat-suggest'); await page.locator('#ct-cat-list li').nth(9).waitFor();
   await page.click('#ct-cat-suggest'); await page.waitForTimeout(300);
   assert.equal(await page.locator('#ct-cat-list li').count(), 10, 'suggestions added once');
   await page.click('#ct-cats-back');
@@ -3837,7 +3843,7 @@ await check('V640-B Contacts: dock + Tools entry · add (Arabic, labelled phones
   await submit();
   assert.deepEqual(await page.evaluate(() => window.__opened), [['https://wa.me/201001234567', '_blank', 'noopener,noreferrer']]);
   // ---- edit (revision), favourite
-  await page.click('#ct-edit'); await page.fill('#ct-f-org', 'Nile Clinic'); await submit();
+  await ctAct(page, '#ct-edit'); await page.fill('#ct-f-org', 'Nile Clinic'); await submit();
   await page.waitForFunction((h) => Object.entries(window.__fake.dump()).some(([k, v]) => k.startsWith(`homes/${h}/contacts/`) && v.organization === 'Nile Clinic' && v.rev === 2), H);
   await page.click('#ct-back');
   await page.locator('.ct-card:has-text("أحمد") [data-action=favorite]').click();
@@ -3859,7 +3865,7 @@ await check('V640-B Contacts: dock + Tools entry · add (Arabic, labelled phones
     'BEGIN:VCARD\nVERSION:3.0\nFN:Sara Again\nTEL:+20 155 000 1111\nEND:VCARD',
     'BEGIN:VCARD\nVERSION:3.0\nTEL:0100\nEND:VCARD',
   ].join('\r\n');
-  await page.click('#ct-import');
+  await ctAct(page, '#ct-import');
   await page.setInputFiles('#ct-imp-file', { name: 'phone.vcf', mimeType: 'text/vcard', buffer: Buffer.from(vcf) });
   await page.locator('#ct-imp-preview').waitFor();
   assert.deepEqual(await page.locator('#ct-imp-list .ct-imp-item').evaluateAll((els) => els.map((e) => e.dataset.status)), ['new', 'duplicate', 'new', 'inFile', 'invalid']);
@@ -3897,7 +3903,7 @@ await check('V640-B Contacts: dock + Tools entry · add (Arabic, labelled phones
 
   // ---- export: scope → personal-information warning → VCF 3.0 (UTF-8, CRLF)
   await page.setViewportSize({ width: 1280, height: 800 });
-  await page.click('#ct-export'); await page.selectOption('#ct-export-scope', 's_doctors'); await page.click('dialog[open] button[type=submit]');   // the warning opens as the scope dialog closes
+  await ctAct(page, '#ct-export'); await page.selectOption('#ct-export-scope', 's_doctors'); await page.click('dialog[open] button[type=submit]');   // the warning opens as the scope dialog closes
   await page.locator('dialog[open][role=alertdialog]').waitFor();
   assert.match(await page.locator('dialog[open]').innerText(), /Export 1 contact/);
   const dl = page.waitForEvent('download'); await page.click('dialog[open] .btn--primary'); const file = await dl;
@@ -3908,19 +3914,19 @@ await check('V640-B Contacts: dock + Tools entry · add (Arabic, labelled phones
   assert.equal((text.match(/BEGIN:VCARD/g) || []).length, 1, 'category scope only');
 
   // ---- delete (soft) → recently deleted → restore
-  await page.locator('.ct-card:has-text("onerror") .ct-card__open').click(); await page.click('#ct-delete');
+  await page.locator('.ct-card:has-text("onerror") .ct-card__open').click(); await ctAct(page, '#ct-delete');
   await page.click('dialog[open] .btn--danger'); await page.locator('#ct-list').waitFor();
   assert.equal(await page.locator('#ct-list .ct-card:has-text("onerror")').count(), 0);
-  await page.click('#ct-deleted'); await page.locator('#ct-del-list li').nth(1).waitFor();
+  await ctAct(page, '#ct-deleted'); await page.locator('#ct-del-list li').nth(1).waitFor();
   await page.locator('#ct-del-list li:has-text("onerror") [data-action=restore]').click();
   await page.locator('#ct-del-list li:has-text("onerror")').waitFor({ state: 'detached' });
   await page.click('#ct-del-back');
   assert.equal(await page.locator('#ct-list .ct-card').count(), 4);
   // rev 2: re-import after a soft delete → reported, NOT restored, NOT copied (until the user explicitly asks)
-  await page.locator('.ct-card:has-text("onerror") .ct-card__open').click(); await page.click('#ct-delete');
+  await page.locator('.ct-card:has-text("onerror") .ct-card__open').click(); await ctAct(page, '#ct-delete');
   await page.click('dialog[open] .btn--danger'); await page.locator('#ct-list').waitFor();
   const snapBefore = JSON.stringify(await docs());
-  await page.click('#ct-import'); await page.setInputFiles('#ct-imp-file', { name: 'phone.vcf', mimeType: 'text/vcard', buffer: Buffer.from(vcf) });
+  await ctAct(page, '#ct-import'); await page.setInputFiles('#ct-imp-file', { name: 'phone.vcf', mimeType: 'text/vcard', buffer: Buffer.from(vcf) });
   await page.locator('#ct-imp-preview').waitFor();
   assert.equal(await page.locator('.ct-imp-item[data-index="2"]').getAttribute('data-status'), 'new', 'the deleted contact is not in the live directory');
   await page.click('#ct-imp-confirm'); await page.locator('#ct-imp-result').waitFor();
@@ -3970,9 +3976,9 @@ await check('V640-B Contacts: dock + Tools entry · add (Arabic, labelled phones
   assert.match(await page.locator('#ct-truncated').innerText(), /more than 1000 contacts\. Only 1000 are loaded/);
   assert.match(await page.locator('#ct-capacity').innerText(), /More than 1000 contacts — only 1000 loaded/);
   assert.match(await page.locator('#ct-count').innerText(), /the directory has more/);
-  assert.equal(await page.locator('#ct-import').isDisabled(), true); assert.equal(await page.locator('#ct-new').isDisabled(), true);
+  await page.click('#ct-more-btn'); assert.equal(await page.getAttribute('#ct-import', 'aria-disabled'), 'true', 'import disabled in the menu'); await page.keyboard.press('Escape'); assert.equal(await page.locator('#ct-new').isDisabled(), true);
   assert.equal(await page.locator('#ct-list .ct-card').count(), 1000);
-  await page.click('#ct-export'); await page.locator('#ct-export-scope').waitFor(); await page.click('dialog[open] button[type=submit]');
+  await ctAct(page, '#ct-export'); await page.locator('#ct-export-scope').waitFor(); await page.click('dialog[open] button[type=submit]');
   await page.locator('dialog[open][role=alertdialog]').waitFor();
   assert.match(await page.locator('dialog[open]').innerText(), /Incomplete: only the first 1000 loaded contacts/);
   await page.click('dialog[open] .btn--secondary'); await page.locator('dialog[open]').waitFor({ state: 'detached' });
@@ -4102,7 +4108,7 @@ await check('V640-C Contact pictures + restaurant menus: avatars (image / broken
   await page.setViewportSize({ width: 1280, height: 800 });
 
   // ---- editor: picture preview / validation / replace / remove; menus reorder / remove / add / validation
-  await page.click('#ct-edit'); await page.locator('#ct-form').waitFor();
+  await ctAct(page, '#ct-edit'); await page.locator('#ct-form').waitFor();
   assert.equal(await page.inputValue('#ct-f-avatar'), `${MEDIA}/ok/pizza.svg`);
   await page.locator('#ct-f-avatar-preview .ct-avatar[data-avatar=image]').waitFor();
   assert.equal(await page.locator('#ct-f-menus').isVisible(), true); assert.equal(await page.locator('.ct-edit-menu').count(), 6);
@@ -4127,38 +4133,38 @@ await check('V640-C Contact pictures + restaurant menus: avatars (image / broken
   assert.deepEqual([d.rev, d.avatarUrl], [4, `${MEDIA}/ok/new.svg`]);
   assert.deepEqual(d.menus, [C_MENUS[0], C_MENUS[2], C_MENUS[3], C_MENUS[4], C_MENUS[5], `image|Desserts|${MEDIA}/ok/m4.svg`], 'order / removal / auto-detected kind');
   // ---- stale media edit (another device saved first) → refused, nothing overwritten
-  await page.click('#ct-edit'); await page.locator('#ct-form').waitFor();
+  await ctAct(page, '#ct-edit'); await page.locator('#ct-form').waitFor();
   await page.evaluate((h) => { const k = `homes/${h}/contacts/pizza01`; const cur = window.__fake.dump()[k]; window.__fake.patch(k, { rev: cur.rev + 1, name: 'Pizza Place (other device)' }); }, H);
   await page.click('#ct-f-avatar-remove');
   await page.click('dialog[open] button[type=submit]'); await page.locator('dialog[open] :text("Someone else changed this contact")').waitFor();
   await page.keyboard.press('Escape'); await page.locator('#ct-form').waitFor({ state: 'detached' });
   d = await cdoc(page, H, 'pizza01'); assert.deepEqual([d.rev, d.avatarUrl, d.name], [5, `${MEDIA}/ok/new.svg`, 'Pizza Place (other device)']);
   // ---- category lifecycle: rename keeps the menu; removal hides it (kept); suggested re-add = reassignment
-  await page.click('#ct-back'); await page.click('#ct-cats');
+  await page.click('#ct-back'); await ctAct(page, '#ct-cats');
   await page.locator('#ct-cat-list li[data-cat=s_restaurants] [data-action=rename]').click();
   await page.fill('#ct-cat-name', 'Food & takeaway'); await page.click('dialog[open] button[type=submit]'); await page.locator('#ct-cat-form').waitFor({ state: 'detached' });
   await page.click('#ct-cats-back'); await page.locator('.ct-card:has-text("Pizza Place") .ct-card__open').click();
   await page.locator('#ct-menu').waitFor(); assert.match(await page.locator('#ct-detail').innerText(), /Food & takeaway/);
-  await page.click('#ct-back'); await page.click('#ct-cats');
+  await page.click('#ct-back'); await ctAct(page, '#ct-cats');
   await page.locator('#ct-cat-list li[data-cat=s_restaurants] [data-action=remove]').click(); await page.click('dialog[open] .btn--danger');
   await page.locator('#ct-cat-list li[data-cat=s_restaurants]').waitFor({ state: 'detached' });
   await page.click('#ct-cats-back'); await page.locator('.ct-card:has-text("Pizza Place") .ct-card__open').click(); await page.locator('#ct-detail').waitFor();
   assert.equal(await page.locator('#ct-menu').count(), 0, 'no Restaurants category → no Menu section');
   assert.equal((await cdoc(page, H, 'pizza01')).menus.length, 6, 'menu data kept');
-  await page.click('#ct-edit'); await page.locator('#ct-form').waitFor();
+  await ctAct(page, '#ct-edit'); await page.locator('#ct-form').waitFor();
   assert.equal(await page.locator('#ct-f-menus').isVisible(), false); assert.match(await page.locator('#ct-f-menus-kept').innerText(), /6 saved menu link/);
   await page.keyboard.press('Escape'); await page.locator('#ct-form').waitFor({ state: 'detached' });
-  await page.click('#ct-back'); await page.click('#ct-cats'); await page.click('#ct-cat-suggest'); await page.locator('#ct-cat-list li[data-cat=s_restaurants]').waitFor();
+  await page.click('#ct-back'); await ctAct(page, '#ct-cats'); await page.click('#ct-cat-suggest'); await page.locator('#ct-cat-list li[data-cat=s_restaurants]').waitFor();
   await page.click('#ct-cats-back'); await page.locator('.ct-card:has-text("Pizza Place") .ct-card__open').click();
   await page.locator('#ct-menu').waitFor(); assert.match(await page.locator('#ct-menu-toggle').innerText(), /Show menu \(6\)/, 'reassigned → menu back, unchanged');
   // ---- an old contact (no media keys): open + save writes nothing; detail shows initials, no menu
   await page.click('#ct-back'); await page.locator('.ct-card:has-text("Old Contact") .ct-card__open').click();
   assert.equal(await page.locator('#ct-menu').count(), 0); assert.equal(await page.getAttribute('#ct-avatar', 'data-avatar'), 'initials');
-  await page.click('#ct-edit'); await page.click('dialog[open] button[type=submit]'); await page.locator('#ct-form').waitFor({ state: 'detached' });
+  await ctAct(page, '#ct-edit'); await page.click('dialog[open] button[type=submit]'); await page.locator('#ct-form').waitFor({ state: 'detached' });
   d = await cdoc(page, H, 'old0001'); assert.deepEqual([d.rev, 'avatarUrl' in d, 'menus' in d], [1, false, false]);
   // ---- export of a restaurant: vCard without picture / menu data
   await page.click('#ct-back'); await page.locator('.ct-card:has-text("Pizza Place") .ct-card__open').click();
-  await page.click('#ct-export-one'); await page.locator('dialog[open][role=alertdialog]').waitFor();
+  await ctAct(page, '#ct-export-one'); await page.locator('dialog[open][role=alertdialog]').waitFor();
   const dl = page.waitForEvent('download'); await page.click('dialog[open] .btn--primary'); const vcf = readFileSync(await (await dl).path(), 'utf8');
   assert.match(vcf, /^BEGIN:VCARD\r\nVERSION:3\.0\r\n/); assert.ok(!/PHOTO|LOGO|URL|media\.hh-e2e|drive\.google/.test(vcf), 'media intentionally excluded');
   await logout();
@@ -4277,8 +4283,9 @@ await check('V640-C rev 2 viewer lifecycle: repeated open / close (button, Esc, 
   await page.keyboard.press('Escape');
   assert.equal(await page.evaluate(() => location.hash), '#/dashboard', 'next sign-in starts on the dashboard (unchanged behaviour)');
   await login('owner@example.com'); await page.locator('.hero__home').waitFor();
-  assert.deepEqual(await listeners(), l0, 'no listener leak after sign-out / sign-in');
-  await openMenu(); await openViewer(); await page.click('#ct-viewer-next'); assert.equal(await page.locator('#ct-viewer-count').innerText(), '2 / 3', 'still fully functional');
+  await openMenu();
+  assert.deepEqual(await listeners(), l0, 'no listener leak after sign-out / sign-in (compared on the same Contacts screen)');
+  await openViewer(); await page.click('#ct-viewer-next'); assert.equal(await page.locator('#ct-viewer-count').innerText(), '2 / 3', 'still fully functional');
   await page.goBack(); await clean('final');
   await cdp.detach(); await logout();
   await desktop.unroute(`${MEDIA}/**`); await desktop.unroute('https://drive.google.com/**');
@@ -4304,6 +4311,272 @@ await check('V640-C rev 2 viewer lifecycle on Android-style mobile (touch, Arabi
   assert.ok((await p.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)) <= 0);
   assert.deepEqual(p.errors, []);
   await ctx.close();
+});
+
+// ======================================================================== V6.4.1 Stage A — Contacts UI + AI JSON
+async function seed641(p, H, { monaRole = 'viewer', lang = 'en' } = {}) {
+  await p.evaluate(async ({ h, menus, media, monaRole, lang }) => {
+    const { defaultRoles } = await import('/src/modules/index.js');
+    const now = new Date().toISOString();
+    window.__fake.set(`homes/${h}`, { name: 'Stage A Home', createdBy: 'UID_OWNER', currency: 'EGP', timezone: 'UTC', language: lang });
+    for (const r of defaultRoles()) window.__fake.set(`homes/${h}/roles/${r.id}`, { name: r.name, rank: r.rank, permissions: r.permissions, system: true, templateVersion: 9 });
+    window.__fake.set(`homes/${h}/members/UID_OWNER`, { uid: 'UID_OWNER', email: 'owner@example.com', displayName: 'Abdo', roleId: 'owner', status: 'active', joinedAt: now });
+    window.__fake.set(`homes/${h}/members/UID_MONA`, { uid: 'UID_MONA', email: 'mona@example.com', displayName: 'Mona', roleId: monaRole, status: 'active', joinedAt: now });
+    const K = (key, order) => ({ name: null, key, order, rev: 1, createdBy: 'UID_OWNER', createdAt: now, updatedBy: 'UID_OWNER', updatedAt: now, schemaVersion: 1 });
+    window.__fake.set(`homes/${h}/contactCategories/s_restaurants`, K('restaurants', 0)); window.__fake.set(`homes/${h}/contactCategories/s_doctors`, K('doctors', 1));
+    const C = (name, phones, x = {}) => ({ name, organization: null, email: null, address: null, notes: null, favorite: false, phones, categoryIds: [], source: 'manual', deleted: false, deletedAt: null, deletedBy: null, rev: 1, createdBy: 'UID_OWNER', createdAt: now, updatedBy: 'UID_OWNER', updatedAt: now, schemaVersion: 1, ...x });
+    window.__fake.set(`homes/${h}/contacts/pizza01`, C('Pizza Place', ['work|+20 2 2345 6789'], { categoryIds: ['s_restaurants'], favorite: true, avatarUrl: `${media}/ok/pizza.svg`, menus, rev: 3 }));
+    window.__fake.set(`homes/${h}/contacts/multi01`, C('Dr. Multi', ['mobile|01001112222', 'work|0223334444'], { categoryIds: ['s_doctors'], favorite: true }));
+    window.__fake.set(`homes/${h}/contacts/intl001`, C('Intl Single', ['mobile|+20 100 555 6666']));
+    for (let i = 0; i < 30; i++) window.__fake.set(`homes/${h}/contacts/fill${String(i).padStart(4, '0')}`, C(`Filler ${String(i).padStart(2, '0')}`, [`mobile|+20 111 000 ${String(1000 + i)}`], { favorite: i % 2 === 0 }));
+    for (const u of ['UID_OWNER', 'UID_MONA']) window.__fake.patch(`users/${u}`, { defaultHomeId: h, language: lang });
+  }, { h: H, menus: C_MENUS, media: MEDIA, monaRole, lang });
+}
+const menuIds = (p, btn) => p.locator(`.ct-more:has(#${btn}) [role=menuitem]`).evaluateAll((els) => els.map((e) => e.id));
+
+await check('V641-A Contacts UI: management actions ONLY in the ⋮ menus (list / details, permission-gated, keyboard + outside close) · full-width New above the list · Category + Favourites side by side 320–412 EN/AR light/dark · tile Call / WhatsApp never open details (chooser for several numbers) · Back to Contacts / browser Back exactly one step with filters + scroll kept (also through the menu viewer, rapid navigation, delete) · no dialer note · upcoming panel hidden', async () => {
+  await ensureSignedOut();
+  const H = 'hV641A'; const err0 = page.errors.length; const log = [];
+  await mediaRoutes(desktop, log);
+  await seed641(page, H);
+  const noOverflow = async (what) => assert.ok((await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)) <= 0, `${what}: no horizontal overflow`);
+  const onList = async () => { await page.locator('#ct-list').waitFor(); assert.equal(await page.locator('#ct-detail').count(), 0); assert.equal(await page.evaluate(() => !!(history.state && history.state.ctNav)), false, 'no sub-view entry'); };
+  await page.setViewportSize({ width: 390, height: 844 });
+  await login('owner@example.com'); await page.locator('.hero__home').waitFor();
+  await page.goto(BASE + '#/m/contacts'); await page.locator('#ct-list .ct-card').nth(5).waitFor();
+  // ---- main ⋮ menu: exactly the five management actions; none of them outside it
+  for (const id of ['#ct-import', '#ct-export', '#ct-json', '#ct-cats', '#ct-deleted']) assert.equal(await page.locator(id).isVisible(), false, `${id} hidden until the menu opens`);
+  assert.deepEqual(await menuIds(page, 'ct-more-btn'), ['ct-import', 'ct-export', 'ct-json', 'ct-cats', 'ct-deleted']);
+  assert.equal(await page.getAttribute('#ct-more-btn', 'aria-haspopup'), 'menu'); assert.equal(await page.getAttribute('#ct-more-btn', 'aria-expanded'), 'false');
+  const bb = await page.locator('#ct-more-btn').boundingBox(); assert.ok(bb.width >= 44 && bb.height >= 44, `44 px target ${JSON.stringify(bb)}`);
+  await page.focus('#ct-more-btn'); await page.keyboard.press('ArrowDown');
+  assert.equal(await page.getAttribute('#ct-more-btn', 'aria-expanded'), 'true'); assert.equal(await page.evaluate(() => document.activeElement.id), 'ct-import');
+  await page.keyboard.press('ArrowDown'); assert.equal(await page.evaluate(() => document.activeElement.id), 'ct-export');
+  await page.keyboard.press('End'); assert.equal(await page.evaluate(() => document.activeElement.id), 'ct-deleted');
+  await page.keyboard.press('ArrowDown'); assert.equal(await page.evaluate(() => document.activeElement.id), 'ct-import', 'wraps');
+  await page.keyboard.press('Escape'); assert.equal(await page.getAttribute('#ct-more-btn', 'aria-expanded'), 'false'); assert.equal(await page.evaluate(() => document.activeElement.id), 'ct-more-btn', 'focus returns');
+  await page.click('#ct-more-btn'); await page.locator('#ct-import').waitFor();
+  await page.click('.ct-head .page-head__title'); await page.locator('#ct-import').waitFor({ state: 'hidden' });
+  assert.equal(await page.getAttribute('#ct-more-btn', 'aria-expanded'), 'false', 'outside click closes');
+  await ctAct(page, '#ct-json'); await page.locator('#ct-json-view').waitFor();
+  assert.equal(await page.locator('#ct-more-btn').count(), 0, 'the management menu belongs to the list only');
+  await page.click('#ct-json-back'); await onList();
+  // ---- New contact: full width, immediately above the list; upcoming panel hidden; no dialer note
+  const nb = await page.locator('#ct-new').boundingBox(); const lb = await page.locator('#ct-list').boundingBox();
+  assert.ok(Math.abs(nb.width - lb.width) <= 2, `New is full width (${nb.width} vs ${lb.width})`); assert.ok(nb.y + nb.height <= lb.y + 1 && lb.y - (nb.y + nb.height) < 60, 'New sits right above the list');
+  assert.equal(await page.locator('#ct-upcoming').isVisible(), false, 'upcoming-events panel stays hidden in Stage A');
+  assert.ok(!(await page.locator('body').innerText()).includes("Call opens your phone's dialer"), 'dialer note removed');
+  // ---- filters side by side, EN / AR, light / dark, 320–412
+  const sideBySide = async (what) => {
+    const a = await page.locator('#ct-cat').boundingBox(); const b = await page.locator('#ct-fav-filter').boundingBox();
+    assert.ok(Math.abs(a.y - b.y) < 6 && a.height > 30 && b.height >= 40, `${what}: Category and Favourites on one row`);
+    await noOverflow(what);
+  };
+  for (const w of [320, 360, 390, 412]) { await page.setViewportSize({ width: w, height: 800 }); await page.waitForTimeout(80); await sideBySide(`EN light ${w}`); }
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.click('.topbar__actions .chip-btn:not(.chip-btn--icon)'); await page.waitForFunction(() => document.documentElement.dir === 'rtl');
+  await page.evaluate(() => { document.documentElement.dataset.theme = 'dark'; });
+  await page.goto(BASE + '#/m/contacts'); await page.locator('#ct-list .ct-card').first().waitFor();
+  for (const w of [320, 360, 390, 412]) { await page.setViewportSize({ width: w, height: 800 }); await page.waitForTimeout(80); await sideBySide(`AR dark ${w}`); }
+  await page.locator('.ct-card:has-text("Dr. Multi") .ct-card__open').click(); await page.locator('#ct-back').waitFor(); await noOverflow('AR dark detail 320');
+  await shot(page, '90-v641a-detail-ar-dark-412');
+  await page.click('#ct-back'); await onList(); await shot(page, '91-v641a-list-ar-dark-412');
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.click('.topbar__actions .chip-btn:not(.chip-btn--icon)'); await page.waitForFunction(() => document.documentElement.dir === 'ltr');
+  await page.evaluate(() => { document.documentElement.dataset.theme = 'light'; });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(BASE + '#/m/contacts'); await page.locator('#ct-list .ct-card').nth(5).waitFor();
+  // ---- tile actions never open the details
+  await page.evaluate(() => {
+    window.__opened = []; window.open = (u, n, f) => { window.__opened.push([u, n, f]); return null; };
+    window.__tel = []; addEventListener('click', (e) => { const a = e.target.closest && e.target.closest('a[href^="tel:"]'); if (a) { e.preventDefault(); window.__tel.push(a.getAttribute('href')); } }, true);
+  });
+  const len0 = await page.evaluate(() => history.length);
+  const intl = page.locator('.ct-card:has-text("Intl Single")');
+  assert.equal(await intl.locator('.ct-act--call').getAttribute('href'), 'tel:+201005556666');
+  await intl.locator('.ct-act--call').click(); await onList();
+  assert.deepEqual(await page.evaluate(() => window.__tel), ['tel:+201005556666']);
+  await intl.locator('.ct-act--wa').click(); await onList();
+  assert.deepEqual(await page.evaluate(() => window.__opened), [['https://wa.me/201005556666', '_blank', 'noopener,noreferrer']], 'international number → WhatsApp directly');
+  await intl.locator('.ct-act--wa').focus(); await page.keyboard.press('Enter'); await onList();
+  assert.equal((await page.evaluate(() => window.__opened)).length, 2, 'keyboard activation does not open details either');
+  const multi = page.locator('.ct-card:has-text("Dr. Multi")');
+  assert.equal(await multi.locator('.ct-act--call').getAttribute('aria-haspopup'), 'dialog');
+  await multi.locator('.ct-act--call').click(); await page.locator('#ct-choose-list').waitFor();
+  assert.deepEqual(await page.locator('#ct-choose-list a').evaluateAll((a) => a.map((x) => x.getAttribute('href'))), ['tel:01001112222', 'tel:0223334444'], 'never guesses: lists every number');
+  await page.keyboard.press('Escape'); await page.locator('#ct-choose-list').waitFor({ state: 'detached' }); await onList();
+  await multi.locator('.ct-act--wa').click(); await page.locator('#ct-choose-list').waitFor();
+  await page.click('#ct-choose-1'); await page.locator('#ct-wa-form').waitFor();   // national number → asks the country code
+  await page.fill('#ct-wa-cc', '20'); await page.click('dialog[open] button[type=submit]'); await page.locator('dialog[open]').waitFor({ state: 'detached' });
+  assert.deepEqual((await page.evaluate(() => window.__opened)).at(-1)[0], 'https://wa.me/20223334444');
+  await onList(); assert.equal(await page.evaluate(() => history.length), len0, 'tile actions add no history entries');
+  // WhatsApp styling: green, recognisable slot (official SVG supplied by the household) or the neutral "WA" badge
+  assert.deepEqual(await intl.locator('.ct-act--wa').evaluate((e) => [getComputedStyle(e).backgroundColor, getComputedStyle(e).color]), ['rgb(31, 168, 85)', 'rgb(255, 255, 255)'], 'WhatsApp green');
+  assert.ok(['ok', 'missing'].includes(await page.evaluate(() => document.documentElement.dataset.waIcon)), 'one probe, settled');
+  // ---- Back: filters + scroll kept, exactly one step (button, browser Back), rapid navigation, delete
+  await page.fill('#ct-search', 'Filler'); await page.click('#ct-fav-filter'); await page.waitForTimeout(400);
+  let shown = await page.locator('#ct-list .ct-card').count(); assert.equal(shown, 15, 'favourite fillers');
+  await page.evaluate(() => window.scrollTo(0, 600)); await page.waitForTimeout(200); let y0 = await page.evaluate(() => scrollY); assert.ok(y0 > 300);
+  const L0 = await page.evaluate(() => history.length);
+  await page.locator('.ct-card:has-text("Filler 10") .ct-card__name').click(); await page.locator('#ct-detail').waitFor();
+  if (L0 < 45) assert.equal(await page.evaluate(() => history.length), L0 + 1, 'details = one entry');   // (Chromium caps history.length at 50 in a long run; Back checks below prove one step)
+  assert.match(await page.locator('#ct-back').innerText(), /Back to Contacts/); const bk = await page.locator('#ct-back').boundingBox(); assert.ok(bk.height >= 44);
+  const restored = async (what) => {
+    await onList(); assert.equal(await page.inputValue('#ct-search'), 'Filler', `${what}: search kept`);
+    assert.equal(await page.getAttribute('#ct-fav-filter', 'aria-pressed'), 'true', `${what}: favourites kept`);
+    assert.equal(await page.locator('#ct-list .ct-card').count(), shown);
+    for (let k = 0; k < 40 && Math.abs((await page.evaluate(() => scrollY)) - y0) >= 40; k++) await page.waitForTimeout(50);
+    assert.ok(Math.abs((await page.evaluate(() => scrollY)) - y0) < 40, `${what}: scroll kept (${await page.evaluate(() => scrollY)} vs ${y0})`); assert.equal(new URL(page.url()).hash, '#/m/contacts');
+  };
+  await page.click('#ct-back'); await restored('Back button');
+  await page.locator('.ct-card:has-text("Filler 12") .ct-card__open').click(); await page.locator('#ct-detail').waitFor();
+  await page.goBack(); await restored('browser Back');
+  await page.goForward(); await page.locator('#ct-detail').waitFor(); assert.match(await page.locator('#ct-detail').innerText(), /Filler 12/, 'Forward re-opens the same contact');
+  await page.goBack(); await restored('Back after Forward');
+  for (let k = 0; k < 6; k++) { await page.locator('.ct-card:has-text("Filler 14") .ct-card__open').click(); await page.locator('#ct-detail').waitFor(); if (k % 2) await page.goBack(); else await page.click('#ct-back'); await page.locator('#ct-list').waitFor(); }
+  await restored('rapid open / back'); assert.ok((await page.evaluate(() => history.length)) <= L0 + 1, 'no growth from rapid navigation');
+  // sub-views: one step each, never stacked
+  await page.evaluate(() => window.scrollTo(0, 0)); await page.waitForTimeout(150); y0 = 0;   // the ⋮ menu is at the top of the list
+  await ctAct(page, '#ct-cats'); await page.locator('#ct-cats-back').waitFor(); await page.goBack(); await restored('categories → Back');
+  await ctAct(page, '#ct-json'); await page.locator('#ct-json-view').waitFor(); await page.click('#ct-json-back'); await restored('JSON → Back to Contacts');
+  // detail ⋮ menu: Edit / Export / Delete only there
+  await page.evaluate(() => window.scrollTo(0, 600)); await page.waitForTimeout(250); y0 = await page.evaluate(() => scrollY);
+  await page.locator('.ct-card:has-text("Filler 10") .ct-card__open').click(); await page.locator('#ct-detail').waitFor();
+  assert.deepEqual(await menuIds(page, 'ct-detail-menu'), ['ct-edit', 'ct-export-one', 'ct-delete']);
+  for (const id of ['#ct-edit', '#ct-export-one', '#ct-delete']) assert.equal(await page.locator(id).isVisible(), false);
+  const Ld = await page.evaluate(() => history.length);
+  await ctAct(page, '#ct-edit'); await page.locator('#ct-form').waitFor(); await page.keyboard.press('Escape'); await page.locator('#ct-form').waitFor({ state: 'detached' });
+  assert.equal(await page.evaluate(() => history.length), Ld, 'editing adds no entry');
+  assert.equal(await page.evaluate(() => !!(history.state && history.state.ctNav && history.state.ctNav.v === 'detail')), true, 'editing keeps the same details entry');
+  await ctAct(page, '#ct-delete'); await page.click('dialog[open] .btn--danger'); shown -= 1;
+  await restored('delete → one step back (list without the deleted contact)');
+  // menu viewer inside details: Back closes the viewer first, then the details — still Contacts
+  await page.goto(BASE + '#/'); await page.locator('.hero__home').waitFor();
+  await page.locator('.dock .nav-link[href="#/m/contacts"]').click(); await page.locator('#ct-list .ct-card').first().waitFor();
+  assert.equal(await page.inputValue('#ct-search'), '', 'a fresh visit starts unfiltered');
+  await page.locator('.ct-card:has-text("Pizza Place") .ct-card__open').click(); await page.locator('#ct-menu-toggle').click();
+  await page.locator('#ct-menu-thumb-0[data-state=loaded]').waitFor(); await page.click('#ct-menu-thumb-0'); await page.locator('#ct-viewer').waitFor();
+  await page.goBack(); await page.locator('#ct-viewer').waitFor({ state: 'detached' }); await page.locator('#ct-detail').waitFor();
+  await page.goBack(); await onList();
+  await page.goBack(); await page.locator('.hero__home').waitFor(); assert.equal(await page.locator('#ct-page').count(), 0, 'Back from the list leaves Contacts — to the page before it (one step)');
+  await page.goForward(); await page.locator('#ct-list').waitFor();
+  assert.deepEqual(page.errors.slice(err0), []);
+  await logout();
+});
+
+await check('V641-A permissions: member menu = Import / Export / AI JSON only (no Categories / Deleted / Delete); viewer has no ⋮ menus, no New, no Edit; tile Call / WhatsApp for everyone', async () => {
+  await ensureSignedOut();
+  await seed641(page, 'hV641P', { monaRole: 'member' });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await login('mona@example.com'); await page.goto(BASE + '#/m/contacts'); await page.locator('#ct-list .ct-card').first().waitFor();
+  assert.deepEqual(await menuIds(page, 'ct-more-btn'), ['ct-import', 'ct-export', 'ct-json']);
+  await page.locator('.ct-card:has-text("Dr. Multi") .ct-card__open').click(); await page.locator('#ct-detail').waitFor();
+  assert.deepEqual(await menuIds(page, 'ct-detail-menu'), ['ct-edit', 'ct-export-one']);
+  await page.click('#ct-back'); await page.locator('#ct-list').waitFor();
+  await logout();
+  await page.evaluate(() => window.__fake.patch('homes/hV641P/members/UID_MONA', { roleId: 'viewer' }));
+  await login('mona@example.com'); await page.goto(BASE + '#/m/contacts'); await page.locator('#ct-list .ct-card').first().waitFor();
+  assert.equal(await page.locator('#ct-more-btn').count(), 0, 'viewer: no management menu'); assert.equal(await page.locator('#ct-new').count(), 0);
+  assert.ok((await page.locator('.ct-act--call').count()) > 0 && (await page.locator('.ct-act--wa').count()) > 0, 'calling is read-only: allowed');
+  // a forged history entry cannot open a view without its permission
+  await page.evaluate(() => { history.pushState({ ...history.state, ctNav: { v: 'json' } }, ''); history.pushState({ ...history.state, ctNav: { v: 'deleted' } }, ''); history.back(); });
+  await page.waitForTimeout(400); assert.equal(await page.locator('#ct-json-view, #ct-deleted-view, #ct-json-text').count(), 0, 'forged entry ignored');
+  await page.locator('#ct-list').waitFor();
+  await page.locator('.ct-card:has-text("Dr. Multi") .ct-card__open').click(); await page.locator('#ct-detail').waitFor();
+  assert.equal(await page.locator('#ct-detail-menu').count(), 0, 'viewer: no detail menu');
+  await page.click('#ct-back'); await page.locator('#ct-list').waitFor();
+  await logout();
+});
+
+await check('V641-A Android-style mobile (touch, Arabic RTL, dark, 360): tap tile → details, hardware Back → the same filtered list and scroll; WhatsApp tap stays on the list; ⋮ menu opens toward the inline end without overflow', async () => {
+  const ctx = await browser.newContext({ viewport: { width: 360, height: 760 }, isMobile: true, hasTouch: true, colorScheme: 'dark' });
+  const p = await newPage(ctx); await mediaRoutes(ctx, []);
+  await p.goto(BASE); await p.locator('#login-email').waitFor(); await seed641(p, 'hV641M', { lang: 'ar' });
+  await p.fill('#login-email', 'owner@example.com'); await p.fill('#login-password', 'correct-horse'); await p.click('button[type=submit]'); await p.locator('.hero__home').waitFor();
+  await p.locator('.dock .nav-link[href="#/m/contacts"]').tap(); await p.locator('#ct-list .ct-card').nth(5).waitFor();
+  assert.equal(await p.evaluate(() => document.documentElement.dir), 'rtl');
+  await p.locator('#ct-fav-filter').tap(); await p.waitForTimeout(300);
+  const n = await p.locator('#ct-list .ct-card').count();
+  await p.evaluate(() => scrollTo(0, 500)); await p.waitForTimeout(200); const y = await p.evaluate(() => scrollY);
+  await p.evaluate(() => { window.__opened = []; window.open = (u) => { window.__opened.push(u); return null; }; });
+  await p.locator('.ct-card:has-text("Filler 08") .ct-act--wa').tap(); await p.waitForTimeout(200);
+  assert.equal(await p.locator('#ct-detail').count(), 0, 'WhatsApp tap does not open details'); assert.equal((await p.evaluate(() => window.__opened)).length, 1);
+  await p.locator('.ct-card:has-text("Filler 08") .ct-card__name').tap(); await p.locator('#ct-detail').waitFor();
+  const bb = await p.locator('#ct-back').boundingBox(); assert.ok(bb.height >= 44 && bb.width >= 120, 'prominent Back to Contacts');
+  await p.goBack(); await p.locator('#ct-list').waitFor();
+  assert.equal(await p.getAttribute('#ct-fav-filter', 'aria-pressed'), 'true'); assert.equal(await p.locator('#ct-list .ct-card').count(), n);
+  for (let k = 0; k < 40 && Math.abs((await p.evaluate(() => scrollY)) - y) >= 40; k++) await p.waitForTimeout(50);
+  assert.ok(Math.abs((await p.evaluate(() => scrollY)) - y) < 40, 'scroll kept');
+  await p.evaluate(() => scrollTo(0, 0)); await p.locator('#ct-more-btn').tap(); await p.locator('#ct-deleted').waitFor();
+  const mb = await p.locator('.ct-more__list').boundingBox(); assert.ok(mb.x >= 0 && mb.x + mb.width <= 360, `menu inside the viewport (RTL) ${JSON.stringify(mb)} btn ${JSON.stringify(await p.locator('#ct-more-btn').boundingBox())}`);
+  assert.ok((await p.evaluate(() => document.documentElement.scrollWidth - innerWidth)) <= 0);
+  await shot(p, '92-v641a-menu-ar-dark-360');
+  await p.locator('#ct-deleted').tap(); await p.locator('#ct-del-back').waitFor(); await p.goBack(); await p.locator('#ct-list').waitFor();
+  assert.deepEqual(p.errors, []);
+  await ctx.close();
+});
+
+await check('V641-A AI JSON: local-only notice · AI prompt / schema / example · export (all / filtered / favourites / picked / category, warning first, no ids) · invalid file rejected whole · invalid items excluded · duplicates skipped by default · explicit merge never overwrites the picture unless ticked · created contacts keep validated media (source json) · re-import is idempotent', async () => {
+  await ensureSignedOut();
+  const H = 'hV641J'; const err0 = page.errors.length;
+  await seed641(page, H);
+  await page.setViewportSize({ width: 412, height: 900 });
+  await login('owner@example.com'); await page.goto(BASE + '#/m/contacts'); await page.locator('#ct-list .ct-card').first().waitFor();
+  await ctAct(page, '#ct-json'); await page.locator('#ct-json-view').waitFor();
+  assert.match(await page.locator('#ct-json-local').innerText(), /.{20,}/);
+  // the example download is itself valid
+  let dl = page.waitForEvent('download'); await page.click('#ct-json-example'); const ex = JSON.parse(readFileSync(await (await dl).path(), 'utf8'));
+  assert.equal(ex.schema, 'homehub.contacts');
+  // export: warning BEFORE the file; favourites scope
+  await page.selectOption('#ct-json-scope', 'fav');
+  await page.click('#ct-json-export'); await page.locator('dialog[open][role=alertdialog]').waitFor();
+  dl = page.waitForEvent('download'); await page.click('dialog[open] .btn--primary'); const text = readFileSync(await (await dl).path(), 'utf8');
+  const out = JSON.parse(text);
+  assert.deepEqual(Object.keys(out), ['schema', 'version', 'items']); assert.equal(out.items.length, 17, '15 favourite fillers + Pizza + Dr. Multi');
+  assert.ok(!/pizza01|multi01|createdBy|"rev"|"id"|hV641J|UID_/.test(text), 'no ids / audit / household data');
+  const pz = out.items.find((i) => i.name === 'Pizza Place'); assert.deepEqual(pz.categories, ['Restaurants']); assert.equal(pz.menus.length, 6); assert.ok(pz.avatarUrl);
+  await page.selectOption('#ct-json-scope', 'picked'); await page.locator('#ct-json-pick').waitFor();
+  await page.locator('#ct-json-pick label:has-text("Intl Single") input').check();
+  await page.click('#ct-json-export'); dl = page.waitForEvent('download'); await page.click('dialog[open] .btn--primary');
+  assert.deepEqual(JSON.parse(readFileSync(await (await dl).path(), 'utf8')).items.map((i) => i.name), ['Intl Single']);
+  // import: whole-file rejections
+  for (const [bad, re] of [['not json', /./], [JSON.stringify({ schema: 'homehub.contacts', version: 1, items: [], household: 'x' }), /household/], [JSON.stringify({ schema: 'x', version: 1, items: [] }), /./]]) {
+    await page.fill('#ct-json-text', bad); await page.click('#ct-json-preview-btn'); await page.locator('#ct-json-error').waitFor();
+    assert.match(await page.locator('#ct-json-error').innerText(), re); assert.equal(await page.locator('#ct-imp-preview').count(), 0, 'nothing previewed');
+  }
+  // import: valid file with a new contact (media), an invalid item, and a duplicate of Pizza Place with a NEW picture
+  const NEWPIC = `${MEDIA}/ok/new-pizza.svg`;
+  const file = JSON.stringify({ schema: 'homehub.contacts', version: 1, items: [
+    { name: 'مطعم الشام', phones: [{ label: 'mobile', number: '+20 122 999 8888' }], categories: ['مطاعم'], avatarUrl: `${MEDIA}/ok/sham.svg`, menus: [{ type: 'image', label: 'Page 1', url: `${MEDIA}/ok/sham-1.svg` }] },
+    { name: 'Hacker', id: 'pizza01', createdBy: 'UID_OWNER' },
+    { name: 'Pizza Place', email: 'hello@pizza.example', phones: [{ label: 'work', number: '+20 2 2345 6789' }], avatarUrl: NEWPIC },
+  ] });
+  await page.fill('#ct-json-text', file); await page.click('#ct-json-preview-btn'); await page.locator('#ct-imp-preview[data-kind=json]').waitFor();
+  assert.deepEqual(await page.locator('.ct-imp-item').evaluateAll((els) => els.map((e) => e.dataset.status)), ['new', 'invalid', 'duplicate']);
+  assert.match(await page.locator('.ct-imp-item[data-index="1"]').innerText(), /id, createdBy/, 'unknown fields named');
+  assert.equal(await page.inputValue('#ct-imp-act-2'), 'skip', 'duplicate skipped by default');
+  await page.selectOption('#ct-imp-act-2', 'merge'); await page.locator('#ct-imp-take-2').waitFor();
+  assert.equal(await page.locator('#ct-imp-take-2 input[value=avatarUrl]').isChecked(), false, 'nothing replaced unless ticked');
+  await page.click('#ct-imp-confirm'); await page.locator('#ct-imp-result').waitFor();
+  let pizza = await cdoc(page, H, 'pizza01');
+  assert.equal(pizza.avatarUrl, `${MEDIA}/ok/pizza.svg`, 'existing picture NOT overwritten'); assert.equal(pizza.menus.length, 6); assert.equal(pizza.email, 'hello@pizza.example', 'empty field filled'); assert.equal(pizza.rev, 4);
+  const all = await page.evaluate((h) => Object.entries(window.__fake.dump()).filter(([k]) => k.startsWith(`homes/${h}/contacts/`)).map(([k, v]) => ({ id: k.split('/').pop(), ...v })), H);
+  const sham = all.find((c) => c.name === 'مطعم الشام');
+  assert.equal(sham.source, 'json'); assert.equal(sham.avatarUrl, `${MEDIA}/ok/sham.svg`); assert.deepEqual(sham.menus, [`image|Page 1|${MEDIA}/ok/sham-1.svg`]); assert.deepEqual(sham.categoryIds, ['s_restaurants']);
+  assert.ok(!all.some((c) => c.name === 'Hacker'), 'invalid item excluded');
+  // second run: the new contact is "imported" (skipped); ticking the picture replaces ONLY the picture
+  await page.click('#ct-json-back'); await page.locator('#ct-list').waitFor(); await ctAct(page, '#ct-json');
+  await page.fill('#ct-json-text', file); await page.click('#ct-json-preview-btn'); await page.locator('#ct-imp-preview').waitFor();
+  assert.deepEqual(await page.locator('.ct-imp-item').evaluateAll((els) => els.map((e) => e.dataset.status)), ['imported', 'invalid', 'duplicate']);
+  await page.selectOption('#ct-imp-act-2', 'merge'); await page.locator('#ct-imp-take-2 input[value=avatarUrl]').check();
+  await page.click('#ct-imp-confirm'); await page.locator('#ct-imp-result').waitFor();
+  pizza = await cdoc(page, H, 'pizza01');
+  assert.equal(pizza.avatarUrl, NEWPIC, 'ticked → replaced'); assert.equal(pizza.menus.length, 6, 'menus untouched'); assert.equal(pizza.rev, 5);
+  const count = await page.evaluate((h) => Object.keys(window.__fake.dump()).filter((k) => k.startsWith(`homes/${h}/contacts/`)).length, H);
+  assert.equal(count, all.length, 'no duplicate created');
+  await page.click('#ct-json-back'); await page.locator('#ct-list').waitFor();
+  assert.deepEqual(page.errors.slice(err0), []);
+  await logout();
 });
 
 await check('ADV-NIGHT routine day honours stored startHour during 00:00–03:00; no wrong-day or duplicate routine on a new session', async () => {

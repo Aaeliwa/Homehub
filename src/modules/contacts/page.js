@@ -1,9 +1,11 @@
 /**
- * Shared Contacts (#/m/contacts) — V6.4 Batch B. One household directory: list (search, category and
- * favourite filters), details with Call / WhatsApp / Copy per number, editor dialog, categories, .vcf import
- * (local file, preview, duplicates, confirm) and .vcf export (all / category / one). All text is rendered
- * with textContent (h()), never as HTML. Every write goes through the store (confirmed, revisioned) and is
- * re-checked by the Firestore rules.
+ * Shared Contacts (#/m/contacts) — V6.4 Batch B / C, V6.4.1 Stage A. One household directory: list (search,
+ * category and favourite filters; Call / WhatsApp on each tile), details with Call / WhatsApp / Copy per
+ * number, editor dialog, categories, .vcf import / export and AI JSON import / export. Management actions live
+ * in "⋮" menus only (list: Import / Export .vcf, AI JSON, Categories, Deleted; details: Edit, Export, Delete).
+ * Details and sub-views are in-page history entries (contacts-nav.js): Back returns exactly one step.
+ * All text is rendered with textContent (h()), never as HTML. Every write goes through the store (confirmed,
+ * revisioned) and is re-checked by the Firestore rules.
  */
 import { h } from '../../core/utils/dom.js';
 import { t, getLocale } from '../../core/i18n/i18n.js';
@@ -17,6 +19,10 @@ import { parseVcf, exportVcf, vcfFileName, VCF_LIMITS } from './vcard.js';
 import { buildPreview, planImport, allowedActions, countPreview, separateOp } from './contacts-import.js';
 import { MEDIA_LIMITS, MENU_KINDS, menusOf, normalizeHttpsUrl, showsMenu, restaurantCategoryIds } from './contact-media.js';
 import { avatarEl, menuSection, openImageViewer } from './media-ui.js';
+import { icon } from '../../ui/components/icons.js';
+import { createContactsNav } from './contacts-nav.js';
+import { ellipsisMenu, paint, waIcon, chooseNumber } from './contacts-ui.js';
+import { parseContactsJson, exportContactsJson, jsonFileName, exampleText, schemaText, aiPrompt, conflictPairs, JSON_LIMITS } from './contacts-json.js';
 
 export function mount(outlet, ctx) {
   const state = ctx.getState(); const can = (p) => state.permissions.can(p);
@@ -27,6 +33,42 @@ export function mount(outlet, ctx) {
   // V6.4 C: Menu section state survives re-renders (per contact); the viewer lives outside the page body
   let menu = { id: null, open: false, previews: new Set() }; let viewer = null; let detailKey = null;
   const menuState = (id) => { if (menu.id !== id) menu = { id, open: false, previews: new Set() }; return menu; };
+  // V6.4.1: in-page history (details / sub-views); the list's filters + scroll ride on the list entry
+  let pendingScroll = null; let saveTimer = null; let json = null;
+  const listState = () => ({ q, cat, fav: favOnly, y: Math.round(window.scrollY || 0) });
+  const nav = createContactsNav({ onChange: (n, saved) => applyNav(n, saved) });
+  const allowed = (v) => v === 'detail' || (v === 'import' && P.imp) || (v === 'json' && (P.imp || P.exp)) || (v === 'categories' && P.cats) || (v === 'deleted' && P.del);
+  function applyNav(n, saved) {
+    backPending = false;
+    if (n && !allowed(n.v)) { goBack(); return; }
+    if (!n) {
+      if (saved) { q = saved.q; cat = saved.cat; favOnly = saved.fav; pendingScroll = saved.y; }
+      view = 'list'; sel = null; if (!(imp && imp.busy)) imp = null; json = null; deleted = null;
+    } else {
+      view = n.v; sel = n.id || null;
+      if (n.v === 'import' && !(imp && imp.kind === 'vcf')) imp = { kind: 'vcf', stage: 'pick' };
+      if (n.v === 'json') { if (!json) json = { scope: 'all', picked: new Set(), text: '' }; if (!(imp && imp.kind === 'json')) imp = null; }
+      if (n.v === 'deleted') deleted = null;
+    }
+    render();
+  }
+  /** list → a sub-view: ONE history entry (Back returns to this list with its filters and scroll). */
+  function openView(v, id) {
+    if (v === 'import') imp = { kind: 'vcf', stage: 'pick' };
+    if (v === 'json') { json = { scope: 'all', picked: new Set(), text: '' }; imp = null; }
+    if (v === 'deleted') deleted = null;
+    nav.open(id ? { v, id } : { v }, listState());
+    view = v; sel = id || null; render(); window.scrollTo(0, 0);
+  }
+  const openDetail = (id) => openView('detail', id);
+  // ONE step back, even when several paths ask at once (e.g. Delete: the handler AND the re-render that finds
+  // the contact gone) — a second history.back() before the popstate arrives would skip the list.
+  let backPending = false;
+  const goBack = () => { if (backPending) return; if (nav.current()) backPending = true; nav.back(); };
+  const saveListSoon = () => { clearTimeout(saveTimer); saveTimer = setTimeout(() => { if (view === 'list') nav.replaceList(listState()); }, 400); };
+  { const saved = nav.savedList(); const init = nav.current();
+    if (saved && !init) { q = saved.q; cat = saved.cat; favOnly = saved.fav; pendingScroll = saved.y; }
+    if (init && allowed(init.v)) { view = init.v; sel = init.id || null; if (init.v === 'import') imp = { kind: 'vcf', stage: 'pick' }; if (init.v === 'json') json = { scope: 'all', picked: new Set(), text: '' }; } }
   const root = h('div', { class: 'page page--contacts accent-rose', id: 'ct-page' }); const body = h('div', { class: 'ct-body', id: 'ct-body' });
   root.append(body); outlet.replaceChildren(root);
   const msg = (e) => t(e && e.detail && /^contacts\./.test(e.detail) ? e.detail : e && /permission/i.test(String(e.code)) ? 'contacts.err.denied' : 'contacts.err.save');
@@ -38,14 +80,18 @@ export function mount(outlet, ctx) {
 
   // ------------------------------------------------------------------ list
   function header() {
-    return h('header', { class: 'page-head page-head--row' },
-      h('div', null, h('h1', { class: 'page-head__title' }, t('module.contacts.name')), h('p', { class: 'page-head__sub' }, t('contacts.sub'))),
-      h('div', { class: 'cl-item__actions ct-head__actions' },
-        P.create ? h('button', { type: 'button', class: 'btn btn--primary', id: 'ct-new', disabled: store.getSnapshot().atLimit, title: store.getSnapshot().atLimit ? t('contacts.err.atLimit') : null, onClick: () => editor(null) }, `＋ ${t('contacts.new')}`) : null,
-        P.imp ? h('button', { type: 'button', class: 'btn btn--secondary', id: 'ct-import', disabled: store.getSnapshot().truncated, title: store.getSnapshot().truncated ? t('contacts.import.truncated') : null, onClick: () => { imp = { stage: 'pick' }; view = 'import'; render(); } }, t('contacts.import.open')) : null,
-        P.exp ? h('button', { type: 'button', class: 'btn btn--secondary', id: 'ct-export', onClick: () => exportDialog() }, t('contacts.export.open')) : null,
-        P.cats ? h('button', { type: 'button', class: 'btn btn--ghost', id: 'ct-cats', onClick: () => { view = 'categories'; render(); } }, t('contacts.cats.open')) : null,
-        P.del ? h('button', { type: 'button', class: 'btn btn--ghost', id: 'ct-deleted', onClick: () => { view = 'deleted'; deleted = null; render(); } }, t('contacts.deleted.open')) : null));
+    const sn = store.getSnapshot();
+    // the management actions exist ONLY in this menu, ONLY on the list, ONLY with their permissions
+    const menu = view === 'list' && sn.status === 'ready' ? ellipsisMenu({ id: 'ct-more-btn', label: t('contacts.menu.manage'), items: [
+      P.imp && { id: 'ct-import', label: t('contacts.import.open'), disabled: sn.truncated, title: sn.truncated ? t('contacts.import.truncated') : null, onSelect: () => openView('import') },
+      P.exp && { id: 'ct-export', label: t('contacts.export.open'), onSelect: () => exportDialog() },
+      (P.imp || P.exp) && { id: 'ct-json', label: t('contacts.json.open'), onSelect: () => openView('json') },
+      P.cats && { id: 'ct-cats', label: t('contacts.cats.open'), onSelect: () => openView('categories') },
+      P.del && { id: 'ct-deleted', label: t('contacts.deleted.open'), onSelect: () => openView('deleted') },
+    ] }) : null;
+    return h('header', { class: 'page-head page-head--row ct-head' },
+      h('div', { class: 'ct-head__text' }, h('h1', { class: 'page-head__title' }, t('module.contacts.name')), h('p', { class: 'page-head__sub' }, t('contacts.sub'))),
+      menu);
   }
   function chips(c) {
     const ids = liveCategoryIds(c, cats());
@@ -58,27 +104,49 @@ export function mount(outlet, ctx) {
     return h('button', { type: 'button', class: ['ct-fav', on && 'is-on', extraClass], 'aria-pressed': String(on), 'aria-label': label, title: label, dataset: { action: 'favorite' },
       onClick: run(() => store.setFavorite(c.id, !on)) }, on ? '★' : '☆');
   }
+  const callTargets = (c) => phonesOf(c).map((p) => ({ label: labelText(p.label), number: p.number, href: telUri(p.number) })).filter((x) => x.href);
+  const waTargets = (c) => phonesOf(c).filter((p) => !whatsappTarget(p.number).error).map((p) => ({ label: labelText(p.label), number: p.number }));
+  /** Tile action: never opens the details (stopPropagation for pointer AND keyboard activation). */
+  const stop = (e) => { e.stopPropagation(); };
+  function callAction(c) {
+    const list = callTargets(c); if (!list.length) return null;
+    const aria = list.length === 1 ? t('contacts.callX', { name: c.name, number: list[0].number }) : t('contacts.callChoose', { name: c.name });
+    if (list.length === 1) return h('a', { class: 'ct-act ct-act--call', href: list[0].href, 'aria-label': aria, title: aria, dataset: { action: 'call' }, onClick: stop, onKeydown: stop }, icon('phone', { size: 20 }));
+    return h('button', { type: 'button', class: 'ct-act ct-act--call', 'aria-label': aria, title: aria, 'aria-haspopup': 'dialog', dataset: { action: 'call' }, onKeydown: stop,
+      onClick: (e) => { stop(e); chooseNumber({ title: t('contacts.chooseCall', { name: c.name }), items: list, action: 'call', container: root }); } }, icon('phone', { size: 20 }));
+  }
+  function waAction(c, extraClass = '') {
+    const list = waTargets(c); if (!list.length) return null;
+    const aria = list.length === 1 ? t('contacts.waX', { name: c.name, number: list[0].number }) : t('contacts.waChoose', { name: c.name });
+    return h('button', { type: 'button', class: ['ct-act ct-act--wa', extraClass], 'aria-label': aria, title: aria, dataset: { action: 'whatsapp' }, 'aria-haspopup': list.length > 1 ? 'dialog' : null, onKeydown: stop,
+      onClick: (e) => { stop(e); if (list.length === 1) openWhatsApp(list[0].number, c.name); else chooseNumber({ title: t('contacts.chooseWa', { name: c.name }), items: list, action: 'whatsapp', container: root, onPick: (x) => openWhatsApp(x.number, c.name) }); } },
+      waIcon());
+  }
   function card(c) {
     const first = phonesOf(c)[0];
-    return h('li', { class: 'ct-card', dataset: { id: c.id } },
-      h('button', { type: 'button', class: 'ct-card__open', onClick: () => { sel = c.id; view = 'detail'; render(); } },
+    return h('li', { class: 'ct-card', dataset: { id: c.id },
+      // a tap anywhere on the tile (outside its own buttons / links) opens the details
+      onClick: (e) => { if (e.target.closest('a, button, input, select')) return; openDetail(c.id); } },
+      h('button', { type: 'button', class: 'ct-card__open', 'aria-label': t('contacts.openX', { name: c.name }), onClick: () => openDetail(c.id) },
         avatarEl(c.name, c.avatarUrl),
         h('span', { class: 'ct-card__text' },
           h('span', { class: 'ct-card__name', dir: 'auto' }, c.name),
           c.organization ? h('span', { class: 'ct-card__sub', dir: 'auto' }, c.organization) : null,
           first ? h('span', { class: 'ct-card__sub ct-num', dir: 'ltr' }, first.number) : null,
           chips(c))),
-      favButton(c));
+      h('span', { class: 'ct-card__acts' }, callAction(c), waAction(c), favButton(c)));
   }
+  /** The list's current filter (also the "current filtered subset" of the JSON export). */
+  const matches = (c) => (!favOnly || c.favorite === true) && (cat === 'all' || (c.categoryIds || []).includes(cat))
+    && searchMatch(c, q, liveCategoryIds(c, store.getSnapshot().categories).map(catName));
   function listView(snap) {
     const locale = getLocale();
     const search = h('input', { type: 'search', class: 'input', id: 'ct-search', value: q, placeholder: t('contacts.search'), 'aria-label': t('contacts.search'), autocomplete: 'off',
-      onInput: (e) => { q = e.target.value; renderList(); } });
+      onInput: (e) => { q = e.target.value; renderList(); saveListSoon(); } });
     const list = h('ul', { class: 'ct-list', id: 'ct-list' });
     const empty = h('p', { class: 'empty', id: 'ct-empty' });
     function renderList() {
-      const now = sortContacts(store.getSnapshot().contacts.filter((c) => (!favOnly || c.favorite === true) && (cat === 'all' || (c.categoryIds || []).includes(cat))
-        && searchMatch(c, q, liveCategoryIds(c, store.getSnapshot().categories).map(catName))), locale);
+      const now = sortContacts(store.getSnapshot().contacts.filter(matches), locale);
       list.replaceChildren(...now.map(card));
       empty.hidden = now.length > 0;
       empty.textContent = store.getSnapshot().contacts.length ? t('contacts.noMatch') : t('contacts.empty');
@@ -93,12 +161,19 @@ export function mount(outlet, ctx) {
       h('p', { class: 'field__hint', id: 'ct-capacity' }, t(snap.truncated ? 'contacts.capacityOver' : 'contacts.capacity', { used: snap.contacts.length, cap: snap.capacity })),
       h('div', { class: 'ct-toolbar' },
         search,
-        h('select', { class: 'input', id: 'ct-cat', 'aria-label': t('contacts.filterCategory'), onChange: (e) => { cat = e.target.value; renderList(); } },
-          h('option', { value: 'all', selected: cat === 'all' }, t('contacts.allCategories')),
-          snap.categories.map((k) => h('option', { value: k.id, selected: cat === k.id }, categoryLabel(k, t)))),
-        h('button', { type: 'button', class: ['btn', 'btn--secondary', 'ct-favfilter', favOnly && 'is-on'], id: 'ct-fav-filter', 'aria-pressed': String(favOnly),
-          onClick: (e) => { favOnly = !favOnly; e.currentTarget.setAttribute('aria-pressed', String(favOnly)); e.currentTarget.classList.toggle('is-on', favOnly); renderList(); } }, `★ ${t('contacts.favoritesOnly')}`)),
-      count, list, empty);
+        // category + Favourites always side by side (one row, also at 320 px; the select truncates)
+        h('div', { class: 'ct-filters' },
+          h('select', { class: 'input ct-filters__cat', id: 'ct-cat', 'aria-label': t('contacts.filterCategory'), onChange: (e) => { cat = e.target.value; renderList(); saveListSoon(); } },
+            h('option', { value: 'all', selected: cat === 'all' }, t('contacts.allCategories')),
+            snap.categories.map((k) => h('option', { value: k.id, selected: cat === k.id }, categoryLabel(k, t)))),
+          h('button', { type: 'button', class: ['btn', 'btn--secondary', 'ct-favfilter', favOnly && 'is-on'], id: 'ct-fav-filter', 'aria-pressed': String(favOnly), 'aria-label': t('contacts.favoritesOnly'),
+            onClick: (e) => { favOnly = !favOnly; e.currentTarget.setAttribute('aria-pressed', String(favOnly)); e.currentTarget.classList.toggle('is-on', favOnly); renderList(); saveListSoon(); } },
+            h('span', { 'aria-hidden': 'true' }, '★'), h('span', { class: 'ct-favfilter__text' }, ` ${t('contacts.favoritesOnly')}`)))),
+      // Stage B fills this panel (upcoming contact activities); hidden until then — no placeholder content
+      h('section', { class: 'ct-upcoming', id: 'ct-upcoming', hidden: true }),
+      count,
+      P.create ? h('button', { type: 'button', class: 'btn btn--primary ct-new', id: 'ct-new', disabled: snap.atLimit, title: snap.atLimit ? t('contacts.err.atLimit') : null, onClick: () => editor(null) }, `＋ ${t('contacts.new')}`) : null,
+      list, empty);
     renderList();
     return out;
   }
@@ -125,8 +200,14 @@ export function mount(outlet, ctx) {
     const phones = phonesOf(c);
     return h('section', { class: 'card fin-card ct-detail', id: 'ct-detail', dataset: { id: c.id } },
       h('div', { class: 'ct-detail__head' },
-        h('button', { type: 'button', class: 'btn btn--ghost btn--sm', id: 'ct-back', onClick: () => { view = 'list'; sel = null; render(); } }, `‹ ${t('contacts.back')}`),
-        favButton(c, 'ct-fav--lg')),
+        // V6.4.1: a strong Back (≥ 44 px; the chevron flips in RTL) — one history step back to the list
+        h('button', { type: 'button', class: 'btn btn--secondary ct-backbtn', id: 'ct-back', onClick: goBack }, icon('back', { size: 20 }), h('span', null, t('contacts.backToList'))),
+        h('span', { class: 'ct-detail__tools' }, favButton(c, 'ct-fav--lg'),
+          ellipsisMenu({ id: 'ct-detail-menu', label: t('contacts.menu.contact', { name: c.name }), items: [
+            P.edit && { id: 'ct-edit', label: t('contacts.edit'), onSelect: () => editor(c) },
+            P.exp && { id: 'ct-export-one', label: t('contacts.export.one'), onSelect: () => exportNow([c], c.name) },
+            P.del && { id: 'ct-delete', label: t('contacts.delete'), tone: 'danger', onSelect: () => removeContact(c) },
+          ] }))),
       h('div', { class: 'ct-detail__id' },
         avatarEl(c.name, c.avatarUrl, { lg: true, id: 'ct-avatar' }),
         h('div', { class: 'ct-detail__names' }, h('h2', { class: 'ct-detail__name', id: 'ct-name', dir: 'auto' }, c.name),
@@ -136,9 +217,9 @@ export function mount(outlet, ctx) {
         return h('li', { class: 'ct-phone', dataset: { index: String(i) } },
           h('span', { class: 'ct-phone__text' }, h('span', { class: 'ct-phone__label' }, labelText(p.label)), h('span', { class: 'ct-num', dir: 'ltr' }, p.number)),
           h('span', { class: 'ct-phone__actions' },
-            tel ? h('a', { class: 'btn btn--primary btn--sm', href: tel, id: `ct-call-${i}`, 'aria-label': t('contacts.callX', { name: c.name, number: p.number }) }, `📞 ${t('contacts.call')}`) : null,
-            !wa.error ? h('button', { type: 'button', class: 'btn btn--secondary btn--sm', id: `ct-wa-${i}`, dataset: { needCountry: String(!!wa.needCountry) },
-              'aria-label': t('contacts.waX', { name: c.name, number: p.number }), onClick: () => openWhatsApp(p.number, c.name) }, t('contacts.whatsapp')) : null,
+            tel ? h('a', { class: 'btn btn--primary btn--sm ct-callbtn', href: tel, id: `ct-call-${i}`, 'aria-label': t('contacts.callX', { name: c.name, number: p.number }) }, icon('phone', { size: 16 }), h('span', null, t('contacts.call'))) : null,
+            !wa.error ? h('button', { type: 'button', class: 'ct-act ct-act--wa ct-act--lg', id: `ct-wa-${i}`, dataset: { needCountry: String(!!wa.needCountry) },
+              'aria-label': t('contacts.waX', { name: c.name, number: p.number }), title: t('contacts.waX', { name: c.name, number: p.number }), onClick: () => openWhatsApp(p.number, c.name) }, waIcon()) : null,
             h('button', { type: 'button', class: 'btn btn--ghost btn--sm', id: `ct-copy-${i}`, onClick: () => copy(p.number) }, t('contacts.copy'))));
       })) : h('p', { class: 'empty' }, t('contacts.noPhones')),
       // V6.4 C: Restaurants (by category KEY — a rename keeps it). Removing the category hides the section;
@@ -149,14 +230,12 @@ export function mount(outlet, ctx) {
         c.email ? h('div', null, h('dt', null, t('contacts.f.email')), h('dd', { dir: 'ltr' }, h('a', { class: 'text-link', href: `mailto:${encodeURIComponent(c.email).replace(/%40/g, '@')}`, id: 'ct-email' }, c.email))) : null,
         c.address ? h('div', null, h('dt', null, t('contacts.f.address')), h('dd', { dir: 'auto', class: 'ct-pre' }, c.address)) : null,
         c.notes ? h('div', { class: 'ct-facts__wide' }, h('dt', null, t('contacts.f.notes')), h('dd', { dir: 'auto', class: 'ct-pre', id: 'ct-notes' }, c.notes)) : null),
-      h('p', { class: 'field__hint' }, t('contacts.callHint')),
-      h('div', { class: 'cl-item__actions' },
-        P.edit ? h('button', { type: 'button', class: 'btn btn--secondary', id: 'ct-edit', onClick: () => editor(c) }, t('contacts.edit')) : null,
-        P.exp ? h('button', { type: 'button', class: 'btn btn--ghost', id: 'ct-export-one', onClick: () => exportNow([c], c.name) }, t('contacts.export.one')) : null,
-        P.del ? h('button', { type: 'button', class: 'btn btn--danger-ghost', id: 'ct-delete', onClick: async () => {
-          if (!(await confirmDialog({ title: t('contacts.deleteTitle', { name: c.name }), message: t('contacts.deleteBody'), confirmLabel: t('contacts.delete'), container: root }))) return;
-          try { await store.deleteContact(c.id); toast(t('contacts.deleted.done'), { tone: 'success' }); view = 'list'; sel = null; render(); } catch (e) { toast(msg(e), { tone: 'error' }); }
-        } }, t('contacts.delete')) : null));
+      // (V6.4.1: the dialer explanation was removed; Edit / Export / Delete live in the "⋮" menu above)
+    );
+  }
+  async function removeContact(c) {
+    if (!(await confirmDialog({ title: t('contacts.deleteTitle', { name: c.name }), message: t('contacts.deleteBody'), confirmLabel: t('contacts.delete'), container: root }))) return;
+    try { await store.deleteContact(c.id); toast(t('contacts.deleted.done'), { tone: 'success' }); if (view === 'detail' && sel === c.id) goBack(); } catch (e) { toast(msg(e), { tone: 'error' }); }
   }
 
   // ------------------------------------------------------------------ editor
@@ -255,14 +334,14 @@ export function mount(outlet, ctx) {
           menus: [...form.querySelectorAll('.ct-edit-menu')].map((r) => ({ kind: r.querySelector('[data-role=kind]').value, label: r.querySelector('[data-role=label]').value, url: r.querySelector('[data-role=url]').value })),
         };
         if (c) { const changed = await store.updateContact(c.id, input, { baseRev }); return changed ? 'contacts.saved' : undefined; }
-        const id = await store.createContact(input); sel = id; view = 'detail'; render();
+        const id = await store.createContact(input); openDetail(id);
         return 'contacts.created';
       } });
   }
 
   // ------------------------------------------------------------------ export
-  function download(text, name) {
-    const blob = new Blob([text], { type: 'text/vcard;charset=utf-8' });
+  function download(text, name, type = 'text/vcard;charset=utf-8') {
+    const blob = new Blob([text], { type });
     const a = h('a', { href: URL.createObjectURL(blob), download: name, hidden: true });
     document.body.append(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
   }
@@ -288,17 +367,17 @@ export function mount(outlet, ctx) {
 
   // ------------------------------------------------------------------ import
   async function readFile(file) {
-    if (file.size > VCF_LIMITS.bytes) { imp = { stage: 'pick', error: 'tooLarge' }; render(); return; }
+    if (file.size > VCF_LIMITS.bytes) { imp = { kind: 'vcf', stage: 'pick', error: 'tooLarge' }; render(); return; }
     const buf = await file.arrayBuffer();
     const parsed = parseVcf(buf);
     const snap = store.getSnapshot();
     const preview = buildPreview(parsed, { contacts: snap.contacts, categories: snap.categories, labelsOf: categoryLabels });
-    imp = { stage: 'preview', fileName: file.name, preview, extra: new Set(), result: null, busy: false };
-    if (parsed.fileErrors.length && !parsed.records.length) imp = { stage: 'pick', error: parsed.fileErrors[0] };
+    imp = { kind: 'vcf', stage: 'preview', fileName: file.name, preview, extra: new Set(), result: null, busy: false };
+    if (parsed.fileErrors.length && !parsed.records.length) imp = { kind: 'vcf', stage: 'pick', error: parsed.fileErrors[0] };
     render();
   }
   function importView() {
-    const back = h('button', { type: 'button', class: 'btn btn--ghost btn--sm', id: 'ct-imp-back', onClick: () => { imp = null; view = 'list'; render(); } }, `‹ ${t('contacts.back')}`);
+    const back = backButton('ct-imp-back');
     const pick = h('section', { class: 'card fin-card', id: 'ct-imp-pick' },
       h('h2', { class: 'card__title' }, t('contacts.import.title')),
       h('p', { class: 'field__hint' }, t('contacts.import.hint', { kb: Math.round(VCF_LIMITS.bytes / 1024), n: VCF_LIMITS.records })),
@@ -307,14 +386,19 @@ export function mount(outlet, ctx) {
       imp.error ? h('div', { id: 'ct-imp-error' }, banner('error', t(`contacts.import.err.${imp.error}`))) : null);
     if (store.getSnapshot().truncated) return h('div', { class: 'ct-stack', id: 'ct-import-view' }, back, h('div', { id: 'ct-imp-error' }, banner('error', t('contacts.import.truncated'))));
     if (imp.stage === 'pick') return h('div', { class: 'ct-stack', id: 'ct-import-view' }, back, pick);
+    return h('div', { class: 'ct-stack', id: 'ct-import-view' }, back, previewBlock());
+  }
+  /** The shared preview / confirm / result block (.vcf AND AI JSON — same duplicate, plan and write pipeline). */
+  function previewBlock() {
+    const isJson = imp.kind === 'json';
     const p = imp.preview; const c = countPreview(p.items);
     const items = p.items.map((it) => {
       const acts = allowedActions(it);
       const actSel = h('select', { class: 'input input--sm', id: `ct-imp-act-${it.index}`, 'aria-label': t('contacts.import.action', { name: it.value.name || `#${it.index + 1}` }), disabled: acts.length === 1 || imp.busy,
         onChange: (e) => { it.action = e.target.value; if (it.action === 'merge' && !it.targetId) it.targetId = it.matches[0] && it.matches[0].id; render(); } },
         acts.map((a) => h('option', { value: a, selected: it.action === a }, t(`contacts.import.act.${a}`))));
-      const target = it.action === 'merge' && it.matches.length > 1 ? h('select', { class: 'input input--sm', id: `ct-imp-target-${it.index}`, 'aria-label': t('contacts.import.target'),
-        onChange: (e) => { it.targetId = e.target.value; } }, it.matches.map((m) => h('option', { value: m.id, selected: it.targetId === m.id }, `${m.name} (${t(`contacts.import.by.${m.by}`)})`))) : null;
+      const targetSel = it.action === 'merge' && it.matches.length > 1 ? h('select', { class: 'input input--sm', id: `ct-imp-target-${it.index}`, 'aria-label': t('contacts.import.target'),
+        onChange: (e) => { it.targetId = e.target.value; it.take = new Set(); render(); } }, it.matches.map((m) => h('option', { value: m.id, selected: it.targetId === m.id }, `${m.name} (${t(`contacts.import.by.${m.by}`)})`))) : null;
       const notes = [
         ...it.errors.map((e) => h('li', { class: 'ct-imp-err' }, t(`contacts.import.e.${e}`))),
         ...it.warnings.map((w) => h('li', null, t(`contacts.import.w.${w}`))),
@@ -323,23 +407,34 @@ export function mount(outlet, ctx) {
         it.status === 'inFile' ? h('li', null, t('contacts.import.inFile', { n: it.inFileOf + 1 })) : null,
         it.status === 'imported' ? h('li', null, t(it.edited ? 'contacts.import.priorEdited' : 'contacts.import.priorSame')) : null,
         it.matches.length && it.status !== 'inFile' ? h('li', null, t('contacts.import.matches', { list: it.matches.map((m) => `${m.name} (${t(`contacts.import.by.${m.by}`)})`).join(' · ') })) : null,
+        isJson && (it.unknownFields || []).length ? h('li', { class: 'ct-imp-err' }, t('contacts.json.unknownFields', { list: it.unknownFields.join(', ') })) : null,
+        isJson && it.value.avatarUrl ? h('li', null, t('contacts.json.hasPicture')) : null,
+        isJson && (it.value.menus || []).length ? h('li', null, t('contacts.json.hasMenus', { n: it.value.menus.length })) : null,
       ].filter(Boolean);
+      // AI JSON merge: every conflicting field (incl. picture / menus) is KEPT unless explicitly ticked here
+      const target = it.action === 'merge' && it.targetId ? store.contact(it.targetId) : null;
+      const takes = isJson && target ? conflictPairs(target, it.value, t) : [];
+      if (!it.take) it.take = new Set();
+      const takeBox = takes.length ? h('fieldset', { class: 'ct-take', id: `ct-imp-take-${it.index}` }, h('legend', { class: 'field__label' }, t('contacts.json.takeTitle')),
+        takes.map((x) => h('label', { class: 'fin-check' }, h('input', { type: 'checkbox', value: x.field, checked: it.take.has(x.field), disabled: imp.busy,
+          onChange: (e) => { if (e.target.checked) it.take.add(x.field); else it.take.delete(x.field); } }),
+        ` ${t('contacts.json.take', { field: t(`contacts.json.field.${x.field}`), current: x.current, file: x.file })}`))) : null;
       return h('li', { class: 'ct-imp-item', dataset: { status: it.status, index: String(it.index) } },
         h('div', { class: 'ct-imp-item__head' },
           h('span', { class: 'ct-imp-item__name', dir: 'auto' }, it.value.name || t('contacts.import.noName', { n: it.index + 1 })),
           h('span', { class: `pill ct-st--${it.status}` }, t(`contacts.import.st.${it.status}`))),
         it.value.phones.length ? h('p', { class: 'ct-card__sub ct-num', dir: 'ltr' }, it.value.phones.map((x) => x.slice(x.indexOf('|') + 1)).join(' · ')) : null,
         notes.length ? h('ul', { class: 'ct-imp-notes' }, notes) : null,
-        h('div', { class: 'ct-imp-item__act' }, actSel, target));
+        h('div', { class: 'ct-imp-item__act' }, actSel, targetSel), takeBox);
     });
     const extra = cats().length ? h('fieldset', { class: 'ct-edit-cats', id: 'ct-imp-cats' }, h('legend', { class: 'field__label' }, t('contacts.import.assign')),
       cats().map((k) => h('label', { class: 'fin-check' }, h('input', { type: 'checkbox', value: k.id, checked: imp.extra.has(k.id), disabled: imp.busy, onChange: (e) => { if (e.target.checked) imp.extra.add(k.id); else imp.extra.delete(k.id); } }), ` ${categoryLabel(k, t)}`))) : null;
     const r = imp.result;
-    const confirm = h('button', { type: 'button', class: 'btn btn--primary', id: 'ct-imp-confirm', disabled: !c.selected || imp.busy || !!r, onClick: () => commit(planImport(p.items, { contacts: store.getSnapshot().contacts, extraCategoryIds: [...imp.extra] })) },
+    const confirm = h('button', { type: 'button', class: 'btn btn--primary', id: 'ct-imp-confirm', disabled: !c.selected || imp.busy || !!r,
+      onClick: () => commit(planImport(p.items, { contacts: store.getSnapshot().contacts, extraCategoryIds: [...imp.extra], source: isJson ? 'json' : 'vcf' })) },
       t('contacts.import.confirm', { n: c.selected }));
     const progress = h('p', { class: 'field__hint', id: 'ct-imp-progress', 'aria-live': 'polite' }, imp.progress || '');
-    return h('div', { class: 'ct-stack', id: 'ct-import-view' }, back,
-      h('section', { class: 'card fin-card', id: 'ct-imp-preview' },
+    return h('section', { class: 'card fin-card', id: 'ct-imp-preview', dataset: { kind: imp.kind } },
         h('h2', { class: 'card__title' }, t('contacts.import.previewTitle', { file: imp.fileName })),
         h('p', { class: 'field__hint', id: 'ct-imp-counts' }, t('contacts.import.counts', c)),
         (() => { const sn = store.getSnapshot(); const adds = p.items.filter((x) => x.action === 'create' || x.action === 'separate').length; const room = Math.max(0, sn.capacity - sn.contacts.length);
@@ -348,7 +443,7 @@ export function mount(outlet, ctx) {
         p.fileErrors.length ? banner('info', p.fileErrors.map((e) => t(`contacts.import.err.${e}`)).join(' ')) : null,
         h('ul', { class: 'ct-imp-list', id: 'ct-imp-list' }, items), extra,
         h('div', { class: 'cl-item__actions' }, confirm,
-          h('button', { type: 'button', class: 'btn btn--ghost', id: 'ct-imp-other', disabled: imp.busy, onClick: () => { imp = { stage: 'pick' }; render(); } }, t('contacts.import.another'))),
+          h('button', { type: 'button', class: 'btn btn--ghost', id: 'ct-imp-other', disabled: imp.busy, onClick: () => { imp = isJson ? null : { kind: 'vcf', stage: 'pick' }; render(); } }, t('contacts.import.another'))),
         progress,
         r ? h('div', { id: 'ct-imp-result', class: 'ct-imp-result' },
           banner(r.failed.length || r.stale.length || r.kept.length || r.deleted.length || r.hidden.length ? 'info' : 'success', t('contacts.import.result', { created: r.created, merged: r.merged, already: r.already, unchanged: r.unchanged, stale: r.stale.length, failed: r.failed.length })),
@@ -362,7 +457,7 @@ export function mount(outlet, ctx) {
           r.stale.length ? h('button', { type: 'button', class: 'btn btn--secondary', id: 'ct-imp-review', onClick: () => { const s = store.getSnapshot(); const again = new Set(r.stale.map((x) => x.index));
             imp.preview = buildPreview({ records: imp.preview.items.filter((x) => again.has(x.index)).map((x) => ({ index: x.index, version: x.version, ok: true, value: { ...x.value, phones: x.value.phones.map((y) => ({ label: y.slice(0, y.indexOf('|')), number: y.slice(y.indexOf('|') + 1) })), categoryNames: [] }, errors: [], warnings: x.warnings, unsupported: x.unsupported, mediaSkipped: x.mediaSkipped })), fileErrors: [] },
               { contacts: s.contacts, categories: s.categories, labelsOf: categoryLabels });
-            imp.result = null; render(); } }, t('contacts.import.review', { n: r.stale.length })) : null) : null));
+            imp.result = null; render(); } }, t('contacts.import.review', { n: r.stale.length })) : null) : null);
   }
   async function commit(ops) {
     imp.busy = true; imp.result = null; render();
@@ -373,11 +468,91 @@ export function mount(outlet, ctx) {
     imp.busy = false; render();
   }
 
+  // ------------------------------------------------------------------ AI JSON import / export (local only)
+  const backButton = (id) => h('button', { type: 'button', class: 'btn btn--secondary ct-backbtn', id, onClick: goBack }, icon('back', { size: 20 }), h('span', null, t('contacts.backToList')));
+  async function copyText(text, okKey) {
+    try { await navigator.clipboard.writeText(text); toast(t(okKey), { tone: 'success' }); } catch { toast(t('contacts.json.copyFailed'), { tone: 'error' }); }
+  }
+  function jsonExportList() {
+    const all = store.getSnapshot().contacts; const v = json.scope;
+    const list = v === 'all' ? all : v === 'filtered' ? all.filter(matches) : v === 'fav' ? all.filter((c) => c.favorite === true)
+      : v === 'picked' ? all.filter((c) => json.picked.has(c.id)) : all.filter((c) => (c.categoryIds || []).includes(v));
+    return sortContacts(list, getLocale());
+  }
+  async function exportJson() {
+    const list = jsonExportList();
+    if (!list.length) { toast(t('contacts.export.nothing'), { tone: 'error' }); return; }
+    const partial = store.getSnapshot().truncated && json.scope !== 'picked';
+    // personal information may be pasted into an external AI service — say so BEFORE anything is produced
+    if (!(await confirmDialog({ title: t('contacts.json.warnTitle', { n: list.length }), message: `${partial ? `${t('contacts.export.truncated', { n: store.getSnapshot().capacity })} ` : ''}${t('contacts.json.warn')}`,
+      confirmLabel: t('contacts.json.download'), tone: 'primary', container: root }))) return;
+    download(exportContactsJson(list, { categoryName: (id) => (catById(id) ? catName(id) : null), locale: getLocale() }), jsonFileName(t('contacts.json.fileBase')), 'application/json;charset=utf-8');
+    toast(t('contacts.export.done', { n: list.length }), { tone: 'success' });
+  }
+  function previewJson(input, fileName) {
+    const parsed = parseContactsJson(input);
+    if (parsed.fileErrors.length) { imp = { kind: 'json', stage: 'pick', error: parsed.fileErrors[0], unknown: parsed.unknown || [] }; render(); return; }
+    const snap = store.getSnapshot();
+    imp = { kind: 'json', stage: 'preview', fileName, preview: buildPreview(parsed, { contacts: snap.contacts, categories: snap.categories, labelsOf: categoryLabels }), extra: new Set(), result: null, busy: false };
+    render();
+    const el = document.getElementById('ct-imp-preview'); if (el) el.scrollIntoView({ block: 'start' });
+  }
+  function jsonView() {
+    const sn = store.getSnapshot(); const all = sn.contacts;
+    const ai = h('section', { class: 'card fin-card', id: 'ct-json-ai' },
+      h('h2', { class: 'card__title' }, t('contacts.json.aiTitle')),
+      h('p', { class: 'field__hint' }, t('contacts.json.aiHint')),
+      h('div', { class: 'cl-item__actions' },
+        h('button', { type: 'button', class: 'btn btn--secondary', id: 'ct-json-copy-prompt', onClick: () => copyText(aiPrompt(), 'contacts.json.promptCopied') }, t('contacts.json.copyPrompt')),
+        h('button', { type: 'button', class: 'btn btn--ghost', id: 'ct-json-copy-schema', onClick: () => copyText(schemaText(), 'contacts.json.schemaCopied') }, t('contacts.json.copySchema')),
+        h('button', { type: 'button', class: 'btn btn--ghost', id: 'ct-json-example', onClick: () => download(exampleText(), 'homehub-contacts-example.json', 'application/json;charset=utf-8') }, t('contacts.json.example'))));
+    const exp = P.exp ? (() => {
+      const scope = h('select', { class: 'input', id: 'ct-json-scope', onChange: (e) => { json.scope = e.target.value; render(); } },
+        [['all', t('contacts.export.all')], ['filtered', t('contacts.json.filtered', { n: all.filter(matches).length })], ['fav', t('contacts.favoritesOnly')], ['picked', t('contacts.json.picked')],
+          ...cats().map((k) => [k.id, t('contacts.export.category', { name: categoryLabel(k, t) })])].map(([v, l]) => h('option', { value: v, selected: json.scope === v }, l)));
+      const pick = json.scope === 'picked' ? h('fieldset', { class: 'ct-json-pick', id: 'ct-json-pick' }, h('legend', { class: 'field__label' }, t('contacts.json.pickTitle', { n: json.picked.size })),
+        sortContacts(all, getLocale()).map((c) => h('label', { class: 'fin-check' }, h('input', { type: 'checkbox', value: c.id, checked: json.picked.has(c.id),
+          onChange: (e) => { if (e.target.checked) json.picked.add(c.id); else json.picked.delete(c.id); const lg = document.querySelector('#ct-json-pick legend'); if (lg) lg.textContent = t('contacts.json.pickTitle', { n: json.picked.size }); } }), ' ', h('span', { dir: 'auto' }, c.name)))) : null;
+      return h('section', { class: 'card fin-card', id: 'ct-json-export-card' },
+        h('h2', { class: 'card__title' }, t('contacts.json.exportTitle')),
+        h('label', { class: 'field' }, h('span', { class: 'field__label' }, t('contacts.export.scope')), scope), pick,
+        h('p', { class: 'field__hint' }, t('contacts.json.exportFields')),
+        h('button', { type: 'button', class: 'btn btn--primary', id: 'ct-json-export', onClick: () => exportJson() }, t('contacts.json.exportBtn')));
+    })() : null;
+    const busy = imp && imp.busy;
+    const importCard = P.imp ? (sn.truncated ? h('section', { class: 'card fin-card', id: 'ct-json-import-card' }, h('div', { id: 'ct-json-error' }, banner('error', t('contacts.import.truncated'))))
+      : (() => {
+        const area = h('textarea', { class: 'input input--area ct-json-text', id: 'ct-json-text', dir: 'ltr', spellcheck: 'false', autocomplete: 'off', 'aria-label': t('contacts.json.paste'), placeholder: '{ "schema": "homehub.contacts", "version": 1, "items": [ … ] }',
+          onInput: (e) => { json.text = e.target.value; } }, json.text || '');
+        const err = imp && imp.kind === 'json' && imp.error ? h('div', { id: 'ct-json-error' }, banner('error', `${t(`contacts.json.err.${imp.error}`, { kb: Math.round(JSON_LIMITS.bytes / 1024), n: JSON_LIMITS.items })}${imp.unknown && imp.unknown.length ? ` (${imp.unknown.join(', ')})` : ''}`)) : null;
+        return h('section', { class: 'card fin-card', id: 'ct-json-import-card' },
+          h('h2', { class: 'card__title' }, t('contacts.json.importTitle')),
+          h('p', { class: 'field__hint' }, t('contacts.json.importHint', { kb: Math.round(JSON_LIMITS.bytes / 1024), n: JSON_LIMITS.items })),
+          h('label', { class: 'field' }, h('span', { class: 'field__label' }, t('contacts.json.paste')), area),
+          h('div', { class: 'cl-item__actions' },
+            h('button', { type: 'button', class: 'btn btn--primary', id: 'ct-json-preview-btn', disabled: busy, onClick: () => {
+              const text = (document.getElementById('ct-json-text') || {}).value || '';
+              if (new TextEncoder().encode(text).length > JSON_LIMITS.bytes) { imp = { kind: 'json', stage: 'pick', error: 'tooLarge' }; render(); return; }
+              json.text = text; previewJson(text, t('contacts.json.pasted'));
+            } }, t('contacts.json.preview')),
+            h('label', { class: 'btn btn--secondary ct-file' }, t('contacts.json.chooseFile'),
+              h('input', { type: 'file', id: 'ct-json-file', accept: '.json,application/json', hidden: true, disabled: busy, onChange: async (e) => {
+                const f = e.target.files && e.target.files[0]; if (!f) return;
+                if (f.size > JSON_LIMITS.bytes) { imp = { kind: 'json', stage: 'pick', error: 'tooLarge' }; render(); return; }
+                previewJson(new Uint8Array(await f.arrayBuffer()), f.name);
+              } }))),
+          h('p', { class: 'field__hint' }, t('contacts.json.noWrites')), err);
+      })()) : null;
+    return h('div', { class: 'ct-stack', id: 'ct-json-view' }, backButton('ct-json-back'),
+      h('p', { class: 'field__hint', id: 'ct-json-local' }, t('contacts.json.localOnly')),
+      ai, exp, importCard, imp && imp.kind === 'json' && imp.stage === 'preview' ? previewBlock() : null);
+  }
+
   // ------------------------------------------------------------------ categories / deleted
   function categoriesView() {
     const list = cats();
     return h('section', { class: 'card fin-card', id: 'ct-cats-view' },
-      h('button', { type: 'button', class: 'btn btn--ghost btn--sm', id: 'ct-cats-back', onClick: () => { view = 'list'; render(); } }, `‹ ${t('contacts.back')}`),
+      backButton('ct-cats-back'),
       h('h2', { class: 'card__title' }, t('contacts.cats.title')),
       h('p', { class: 'field__hint' }, t('contacts.cats.hint')),
       list.length ? h('ul', { class: 'fin-list', id: 'ct-cat-list' }, list.map((k) => h('li', { class: 'fin-row fin-row--wrap', dataset: { cat: k.id } },
@@ -400,7 +575,7 @@ export function mount(outlet, ctx) {
   }
   function deletedView() {
     if (deleted === null) { deleted = 'loading'; store.loadDeleted().then((d) => { deleted = d; render(); }, (e) => { deleted = { error: e }; render(); }); }
-    const back = h('button', { type: 'button', class: 'btn btn--ghost btn--sm', id: 'ct-del-back', onClick: () => { view = 'list'; render(); } }, `‹ ${t('contacts.back')}`);
+    const back = backButton('ct-del-back');
     const content = deleted === 'loading' ? h('p', { class: 'muted', role: 'status' }, t('common.loading'))
       : deleted.error ? banner('error', errorText(deleted.error))
         : deleted.items.length ? h('ul', { class: 'fin-list', id: 'ct-del-list' }, deleted.items.map((c) => h('li', { class: 'fin-row fin-row--wrap', dataset: { id: c.id } },
@@ -414,29 +589,39 @@ export function mount(outlet, ctx) {
   // ------------------------------------------------------------------ render
   function render() {
     const snap = store.getSnapshot();
-    if (snap.status === 'denied') { body.replaceChildren(header(), banner('error', t('contacts.err.noAccess'))); return; }
-    if (snap.status === 'error') { body.replaceChildren(header(), banner('error', errorText(snap.error))); return; }
-    if (snap.status !== 'ready') { body.replaceChildren(header(), h('p', { class: 'muted', role: 'status', id: 'ct-loading' }, t('common.loading'))); return; }
+    if (snap.status === 'denied') { paint(body, header(), banner('error', t('contacts.err.noAccess'))); return; }
+    if (snap.status === 'error') { paint(body, header(), banner('error', errorText(snap.error))); return; }
+    if (snap.status !== 'ready') { paint(body, header(), h('p', { class: 'muted', role: 'status', id: 'ct-loading' }, t('common.loading'))); return; }
     if (view === 'detail') {
       const c = store.contact(sel);
-      if (!c) { view = 'list'; sel = null; }
-      else {
+      if (!c) {
+        // the contact is gone (deleted elsewhere, or a stale history entry): one step back to the list
+        detailKey = null; if (nav.current() && nav.current().v === 'detail') { goBack(); return; }
+        view = 'list'; sel = null;
+      } else {
         // same contact revision + same categories → nothing to redraw (open menu previews are not reloaded)
         const key = JSON.stringify([c.id, c.rev, snap.categories.map((k) => [k.id, k.rev, k.name]), snap.atLimit, snap.truncated]);
         if (key === detailKey && body.querySelector('#ct-detail')) return;
-        detailKey = key; body.replaceChildren(header(), detailView(c)); return;
+        detailKey = key; paint(body, header(), detailView(c)); return;
       }
     }
     detailKey = null;
     menu = { id: null, open: false, previews: new Set() };   // leaving a contact collapses its menu: no requests until opened again
-    if (view === 'import' && imp) { body.replaceChildren(header(), importView()); return; }
-    if (view === 'categories' && P.cats) { body.replaceChildren(header(), categoriesView()); return; }
-    if (view === 'deleted' && P.del) { body.replaceChildren(header(), deletedView()); return; }
+    if (view === 'import' && imp && P.imp) { paint(body, header(), importView()); return; }
+    if (view === 'json' && json && (P.imp || P.exp)) {
+      const ta = document.activeElement && document.activeElement.id === 'ct-json-text';
+      paint(body, header(), jsonView());
+      if (ta) { const el = document.getElementById('ct-json-text'); if (el) el.focus(); }
+      return;
+    }
+    if (view === 'categories' && P.cats) { paint(body, header(), categoriesView()); return; }
+    if (view === 'deleted' && P.del) { paint(body, header(), deletedView()); return; }
     view = 'list';
     const focusSearch = document.activeElement && document.activeElement.id === 'ct-search';
-    body.replaceChildren(header(), listView(snap));
+    paint(body, header(), listView(snap));
     if (focusSearch) { const s = document.getElementById('ct-search'); s.focus(); s.setSelectionRange(s.value.length, s.value.length); }
+    if (pendingScroll !== null) { const y = pendingScroll; pendingScroll = null; requestAnimationFrame(() => window.scrollTo(0, y)); }
   }
   const off = store.subscribe(() => { if (imp && imp.busy) return; render(); });
-  return () => { off(); if (viewer) viewer.finish('unmount'); };   // route change / household switch / sign-out / re-render
+  return () => { off(); nav.dispose(); for (const m of body.querySelectorAll('.ct-more')) m.ctMore.close(false); clearTimeout(saveTimer); if (viewer) viewer.finish('unmount'); };   // route change / household switch / sign-out / re-render
 }

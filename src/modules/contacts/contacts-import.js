@@ -6,6 +6,7 @@
  * "keep separate" (a new contact).
  */
 import { validateContact, findMatches, importId, matchKey, fold, mergeValue, sameContent, CONTACT_LIMITS, isDeleted } from './contact-model.js';
+import { mergeJson } from './contacts-json.js';
 
 export const ACTIONS = Object.freeze(['create', 'skip', 'merge', 'separate']);
 
@@ -31,10 +32,12 @@ export function buildPreview(parsed, { contacts = [], categories = [], labelsOf 
   const items = []; const seen = [];   // earlier VALID records in this file (in-file duplicates)
   for (const r of parsed.records) {
     const cats = mapCategories(r.value.categoryNames, categories, labelsOf);
-    const v = validateContact({ ...r.value, categoryIds: cats.ids, favorite: false }, { categories });
+    // .vcf records never carry a favourite or media; AI JSON records may (validated by the same validators)
+    const v = validateContact({ ...r.value, categoryIds: cats.ids, favorite: r.version === 'json' && r.value.favorite === true }, { categories });
     const errors = [...r.errors, ...Object.values(v.errors).map((e) => e.replace(/^contacts\.v\./, ''))];
     const base = { index: r.index, version: r.version, value: v.value, categoryIds: cats.ids, unknownCategories: cats.unknown,
-      errors: [...new Set(errors)], warnings: r.warnings, unsupported: r.unsupported, mediaSkipped: r.mediaSkipped, matches: [], inFileOf: null };
+      errors: [...new Set(errors)], warnings: r.warnings, unsupported: r.unsupported, mediaSkipped: r.mediaSkipped, matches: [], inFileOf: null,
+      ...(r.version === 'json' ? { unknownFields: r.unknownFields || [] } : {}) };
     if (errors.length || !r.ok) { items.push({ ...base, status: 'invalid', action: 'skip' }); continue; }
     const cand = { name: v.value.name, phones: v.value.phones.map((p) => ({ number: p.slice(p.indexOf('|') + 1) })) };
     const keys = cand.phones.map((p) => matchKey(p.number)).filter((k) => k.length >= 6);
@@ -77,9 +80,9 @@ export function allowedActions(it) {
  *  - Only an explicit "keep separate" gets a copy number (≥ 1), skipping ids known to be taken (live
  *    contacts, takenIds, and ids planned earlier in this run); the store may move it further on a conflict.
  *  - Merges carry the target's revision seen in the preview (stale → re-confirm).
- * extraCategoryIds: categories the user assigned to the whole import.
+ * extraCategoryIds: categories the user assigned to the whole import. source: 'vcf' (default) | 'json' (V6.4.1).
  */
-export function planImport(items, { contacts = [], takenIds = [], extraCategoryIds = [] } = {}) {
+export function planImport(items, { contacts = [], takenIds = [], extraCategoryIds = [], source = 'vcf' } = {}) {
   const taken = new Set([...takenIds, ...contacts.map((c) => c.id)]);
   const byId = new Map(contacts.map((c) => [c.id, c]));
   const ops = [];
@@ -89,21 +92,22 @@ export function planImport(items, { contacts = [], takenIds = [], extraCategoryI
     if (it.action === 'merge') {
       const target = byId.get(it.targetId); const seen = it.matches.find((m) => m.id === it.targetId);
       if (!target || !seen) { ops.push({ kind: 'merge', index: it.index, name: value.name, targetId: it.targetId, error: 'contacts.import.targetGone' }); continue; }
-      const m = mergeValue(target, value);
+      // V6.4.1: JSON merges may replace a conflicting field only when the user ticked it (it.take); .vcf unchanged
+      const m = source === 'json' ? mergeJson(target, value, it.take || new Set()) : mergeValue(target, value);
       ops.push({ kind: 'merge', index: it.index, name: value.name, targetId: it.targetId, baseRev: seen.rev, value: m.value, changed: m.changed, conflicts: m.conflicts, droppedPhones: m.droppedPhones });
       continue;
     }
-    if (it.action === 'separate') { ops.push(separateOp({ index: it.index, value }, taken)); continue; }
+    if (it.action === 'separate') { ops.push(separateOp({ index: it.index, value, source }, taken)); continue; }
     const id = importId(value, 0); taken.add(id);
-    ops.push({ kind: 'create', index: it.index, name: value.name, id, copy: 0, value });
+    ops.push({ kind: 'create', index: it.index, name: value.name, id, copy: 0, value, source });
   }
   return ops;
 }
 /** Explicit "keep separate" (from the preview, or for occupied results the user chose to add anyway). */
-export function separateOp({ index, value }, taken = new Set()) {
+export function separateOp({ index, value, source = 'vcf' }, taken = new Set()) {
   let copy = 1; let id = importId(value, copy);
   while (taken.has(id) && copy < MAX_COPY) id = importId(value, ++copy);
   taken.add(id);
-  return { kind: 'create', index, name: value.name, id, copy, separate: true, value };
+  return { kind: 'create', index, name: value.name, id, copy, separate: true, value, source };
 }
 export const MAX_COPY = 50;

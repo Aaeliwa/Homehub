@@ -151,7 +151,7 @@ export function createContactsStore({ homeId, uid, repo, canView }) {
               let id = op.id; let copy = op.copy || 0; let outcome = null;
               for (;;) {
                 if (room <= 0) { outcome = 'capacity'; break; }
-                try { await repo.commit(homeId, [{ mode: 'set', name: CC, id, data: createDoc(value, { uid, now: repo.now(), source: 'vcf' }) }]); outcome = 'created'; room--; break; }
+                try { await repo.commit(homeId, [{ mode: 'set', name: CC, id, data: createDoc(value, { uid, now: repo.now(), source: op.source === 'json' ? 'json' : 'vcf' }) }]); outcome = 'created'; room--; break; }
                 catch (e) {
                   if (!denied(e)) throw e;
                   const kind = classifyOccupied(await occupant(id), value);

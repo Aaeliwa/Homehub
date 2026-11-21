@@ -2913,3 +2913,17 @@ test('V64C-6 (rev 2) picture URL: local-network suffixes and wildcard-DNS hosts 
   for (const [i, u] of ['https://localhost.example/a.png', 'https://myhome.example/a.png', 'https://local.example.com/a.png', 'https://cdn.example.com/home/a.png'].entries())
     await assertSucceeds(setDoc(cnPath(db(OWNER_A), `host1${i}`), cnDoc(OWNER_A, { avatarUrl: u })), u);
 });
+
+test('V641A-1 AI JSON import (source "json"): contacts.import required; validated media allowed (unlike .vcf); every media check still applies; viewer / child / outsider refused', async () => {
+  await contactsHome();
+  await assertSucceeds(setDoc(cnPath(db(MEMBER_WIFE), 'vc_json000000001'), cnDoc(MEMBER_WIFE, { source: 'json' })), 'member: JSON import without media');
+  await assertSucceeds(setDoc(cnPath(db(MEMBER_WIFE), 'vc_json000000002'), cnDoc(MEMBER_WIFE, { source: 'json', categoryIds: ['s_restaurants'], avatarUrl: AV, menus: MENUS })), 'member: JSON import with picture + menus');
+  await assertDenied(setDoc(cnPath(db(MEMBER_WIFE), 'vc_json000000002'), cnDoc(MEMBER_WIFE, { source: 'json', name: 'Other' })), 'existing id: never overwritten (create-only)');
+  await assertDenied(setDoc(cnPath(db(MEMBER_WIFE), 'vc_json000000003'), cnDoc(MEMBER_WIFE, { source: 'json', avatarUrl: 'http://cdn.example.com/a.png' })), 'http picture refused');
+  await assertDenied(setDoc(cnPath(db(MEMBER_WIFE), 'vc_json000000004'), cnDoc(MEMBER_WIFE, { source: 'json', avatarUrl: 'https://printer.local/a.png' })), 'local-network picture refused');
+  await assertDenied(setDoc(cnPath(db(MEMBER_WIFE), 'vc_json000000005'), cnDoc(MEMBER_WIFE, { source: 'json', menus: ['image|https://a.example/a.jpg'] })), 'malformed menu element refused');
+  await assertDenied(setDoc(cnPath(db(MEMBER_WIFE), 'vc_json000000006'), cnDoc(MEMBER_WIFE, { source: 'vcf', avatarUrl: AV })), '.vcf still never carries media');
+  await assertDenied(setDoc(cnPath(db(MEMBER_WIFE), 'vc_json000000007'), cnDoc(MEMBER_WIFE, { source: 'JSON' })), 'source enum is exact');
+  for (const u of [VIEWER_A, CHILD_A, MALLORY]) await assertDenied(setDoc(cnPath(db(u), `vc_json_${u.uid}`.slice(0, 40)), cnDoc(u, { source: 'json' })), `${u.uid} JSON import`);
+  await assertDenied(cnUp(MEMBER_WIFE, 'vc_json000000001', { source: 'manual', rev: 2 }), 'source is immutable after create');
+});
