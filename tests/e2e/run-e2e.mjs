@@ -4348,7 +4348,7 @@ await check('V641-A Contacts UI: management actions ONLY in the ⋮ menus (list 
   for (const id of ['#ct-import', '#ct-export', '#ct-json', '#ct-cats', '#ct-deleted']) assert.equal(await page.locator(id).isVisible(), false, `${id} hidden until the menu opens`);
   assert.deepEqual(await menuIds(page, 'ct-more-btn'), ['ct-import', 'ct-export', 'ct-json', 'ct-cats', 'ct-deleted']);
   assert.equal(await page.getAttribute('#ct-more-btn', 'aria-haspopup'), 'menu'); assert.equal(await page.getAttribute('#ct-more-btn', 'aria-expanded'), 'false');
-  const bb = await page.locator('#ct-more-btn').boundingBox(); assert.ok(bb.width >= 44 && bb.height >= 44, `44 px target ${JSON.stringify(bb)}`);
+  const bb = await page.locator('#ct-more-btn').boundingBox(); assert.ok(bb.width >= 43.5 && bb.height >= 43.5, `44 px target (sub-pixel layout rounding) ${JSON.stringify(bb)}`);
   await page.focus('#ct-more-btn'); await page.keyboard.press('ArrowDown');
   assert.equal(await page.getAttribute('#ct-more-btn', 'aria-expanded'), 'true'); assert.equal(await page.evaluate(() => document.activeElement.id), 'ct-import');
   await page.keyboard.press('ArrowDown'); assert.equal(await page.evaluate(() => document.activeElement.id), 'ct-export');
@@ -4577,6 +4577,164 @@ await check('V641-A AI JSON: local-only notice · AI prompt / schema / example �
   await page.click('#ct-json-back'); await page.locator('#ct-list').waitFor();
   assert.deepEqual(page.errors.slice(err0), []);
   await logout();
+});
+
+// ======================================================================== V6.4.1 Stage B — Upcoming + activities + reminders
+// The Home time zone is chosen so that the Home clock reads ~12:00 whenever the suite runs (no midnight flake).
+function noonZone() { const off = 12 - new Date().getUTCHours(); return off === 0 ? 'Etc/GMT' : off > 0 ? `Etc/GMT-${off}` : `Etc/GMT+${-off}`; }
+function homeDay(tz, plus = 0) { const d = new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date()); const x = new Date(`${d}T12:00:00Z`); x.setUTCDate(x.getUTCDate() + plus); return x.toISOString().slice(0, 10); }
+function homeClock(tz, plusMin = 0) { const p = new Intl.DateTimeFormat('en-GB', { timeZone: tz, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(Date.now() + plusMin * 60000)); return p; }
+async function seed641b(p, H, { tz, monaRole = 'member', lang = 'en', empty = false } = {}) {
+  const D = { today: homeDay(tz), yest: homeDay(tz, -1), tom: homeDay(tz, 1), in2: homeDay(tz, 2), in3: homeDay(tz, 3), soon: homeClock(tz, 10), soonEnd: homeClock(tz, 40) };
+  await p.evaluate(async ({ h, tz, D, monaRole, lang, empty }) => {
+    const { defaultRoles } = await import('/src/modules/index.js');
+    const now = new Date().toISOString(); const A = { createdBy: 'UID_OWNER', createdAt: now, updatedBy: 'UID_OWNER', updatedAt: now, schemaVersion: 1 };
+    window.__fake.set(`homes/${h}`, { name: empty ? 'Empty Home' : 'Upcoming Home', createdBy: 'UID_OWNER', currency: 'EGP', timezone: tz, language: lang });
+    for (const r of defaultRoles()) window.__fake.set(`homes/${h}/roles/${r.id}`, { name: r.name, rank: r.rank, permissions: r.permissions, system: true, templateVersion: 9 });
+    window.__fake.set(`homes/${h}/members/UID_OWNER`, { uid: 'UID_OWNER', email: 'owner@example.com', displayName: 'Abdo', roleId: 'owner', status: 'active', joinedAt: now });
+    window.__fake.set(`homes/${h}/members/UID_MONA`, { uid: 'UID_MONA', email: 'mona@example.com', displayName: 'Mona', roleId: monaRole, status: 'active', joinedAt: now });
+    for (const u of ['UID_OWNER', 'UID_MONA']) window.__fake.patch(`users/${u}`, { defaultHomeId: h, language: lang });
+    if (empty) return;
+    const EV = (id, x) => window.__fake.set(`homes/${h}/calendarEvents/${id}`, { title: id, type: 'other', shift: null, allDay: true, startDate: D.today, endDate: D.today, startTime: null, endTime: null,
+      description: null, location: null, audience: 'household', timezone: tz, done: false, source: 'manual', sourceKey: null, importBatchId: null, importRev: null, deletedAt: null, deletedBy: null, rev: 1, ...A, ...x });
+    EV('evCall', { title: 'Team call', allDay: false, startTime: D.soon, endTime: D.soonEnd, reminderMinutes: 15 });
+    EV('evDentist', { title: 'Dentist', startDate: D.tom, endDate: D.tom });
+    EV('evFees', { title: 'Pay school fees', type: 'task', startDate: D.yest, endDate: D.yest });
+    EV('evParty', { title: 'Old party', startDate: D.yest, endDate: D.yest });
+    EV('evSecret', { title: 'Mona secret', audience: 'private', createdBy: 'UID_MONA', updatedBy: 'UID_MONA' });
+    EV('evPlumber', { title: 'Call the plumber', kind: 'contactActivity', contactId: 'plumber01', status: 'planned', startDate: D.in2, endDate: D.in2, reminderMinutes: null });
+    window.__fake.set(`homes/${h}/commitments/cNet`, { name: 'Internet bill', amountMinor: 60000, currency: 'EGP', category: 'utilities', recurrence: { unit: 'month', interval: 1 }, anchorDay: Number(D.tom.slice(8)), nextDueDate: D.tom,
+      paymentMethod: 'bank_transfer', walletId: null, notes: null, lastPaidDate: null, audience: 'household', readers: [], active: true, archivedAt: null, archivedBy: null, ...A });
+    window.__fake.set(`homes/${h}/rooms/kit`, { name: 'Kitchen', type: 'kitchen', icon: 'kitchen', sortOrder: 1, active: true });
+    window.__fake.set(`homes/${h}/cleaningTasks/k1`, { title: 'Wipe counter', instructions: null, roomId: 'kit', priority: 'normal', assignMode: 'shared', assigneeUids: [], eligibleUids: [], recurrence: { kind: 'days', interval: 1 },
+      startDate: D.today, dueDate: null, endDate: null, active: true, archivedAt: null, archivedBy: null, schemaVersion: 1 });
+    const C = (name, phones, x = {}) => ({ name, organization: null, email: null, address: null, notes: null, favorite: false, phones, categoryIds: [], source: 'manual', deleted: false, deletedAt: null, deletedBy: null, rev: 1, ...A, ...x });
+    window.__fake.set(`homes/${h}/contacts/plumber01`, C('Hassan Plumber', ['mobile|+20 100 777 8888']));
+  }, { h: H, tz, D, monaRole, lang, empty });
+  return D;
+}
+const upKeys = (p) => p.locator('#up-panel .up-item').evaluateAll((els) => els.map((e) => `${e.dataset.bucket}:${e.querySelector('.up-item__title').textContent.trim()}`));
+
+await check('V641-B Dashboard Upcoming: Calendar · contact activity · bill · cleaning in ONE chronological list (overdue / today / next 7 days); private and past plain events excluded; each row opens its module; EN/AR, light/dark, 320–1280 without overflow; loading / error / empty states', async () => {
+  await ensureSignedOut(); const err0 = page.errors.length;
+  const tz = noonZone(); const H = 'hV641B'; const D = await seed641b(page, H, { tz });
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await login('owner@example.com'); await page.locator('.hero__home').waitFor();
+  await page.locator('#up-panel .up-item').first().waitFor();
+  assert.equal(await page.locator('#rm-widget').count(), 0, 'the old Reminders dashboard card is NOT restored');
+  assert.deepEqual(await upKeys(page), ['overdue:Pay school fees', 'today:Pending cleaning tasks', 'today:Team call', 'upcoming:Dentist', 'upcoming:Internet bill', 'upcoming:Call the plumber']);
+  const text = await page.locator('#up-panel').innerText();
+  assert.ok(!/Old party|Mona secret/.test(text), 'past plain event and another member\'s private event never shown');
+  assert.match(text, /EGP|600/, 'amounts shown with expenses.viewFinancialTotals');
+  assert.match(await page.locator('#up-panel .up-item[data-source="contactActivity"]').innerText(), /Contact activity/);
+  // navigation
+  await page.locator('#up-panel .up-item:has-text("Internet bill") .up-item__btn').click();
+  await page.locator('#fin-tab-commitments[aria-selected="true"]').waitFor();
+  await page.goBack(); await page.locator('#up-panel .up-item').first().waitFor();
+  await page.locator('#up-panel .up-item:has-text("Dentist") .up-item__btn').click();
+  await page.locator(`#cal-page [data-date="${D.tom}"][aria-selected="true"]`).waitFor();
+  await page.goBack(); await page.locator('#up-panel .up-item:has-text("Pending cleaning tasks") .up-item__btn').click();
+  await page.waitForFunction(() => location.hash.startsWith('#/m/cleaning'));
+  await page.goBack(); await page.locator('#up-panel .up-item').first().waitFor();
+  // responsive, RTL, dark
+  for (const w of [320, 360, 390, 412, 768]) { await page.setViewportSize({ width: w, height: 900 }); await page.waitForTimeout(80);
+    assert.ok((await page.evaluate(() => document.documentElement.scrollWidth - innerWidth)) <= 0, `EN ${w}: no overflow`);
+    const bb = await page.locator('#up-panel .up-item__btn').first().boundingBox(); assert.ok(bb.height >= 47.5, `${w}: 48 px rows`); }
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.click('.topbar__actions .chip-btn:not(.chip-btn--icon)'); await page.waitForFunction(() => document.documentElement.dir === 'rtl');
+  await ensureTheme(page, 'dark'); await page.locator('#up-panel .up-item').first().waitFor();
+  assert.match(await page.locator('#up-title').innerText(), /القادم/); assert.match(await page.locator('#up-g-overdue').innerText(), /متأخر/);
+  for (const w of [320, 360, 412]) { await page.setViewportSize({ width: w, height: 900 }); await page.waitForTimeout(80);
+    assert.ok((await page.evaluate(() => document.documentElement.scrollWidth - innerWidth)) <= 0, `AR dark ${w}: no overflow`); }
+  await shot(page, '93-v641b-upcoming-ar-dark-360');
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await ensureTheme(page, 'light'); await page.click('.topbar__actions .chip-btn:not(.chip-btn--icon)'); await page.waitForFunction(() => document.documentElement.dir === 'ltr');
+  // error state (calendar backend unavailable) and recovery
+  await page.evaluate(() => window.__fake.failOn('calendarEvents')); await page.locator('#up-error').waitFor();
+  await page.evaluate(() => window.__fake.failOn(null)); await page.locator('#up-panel .up-item').first().waitFor();
+  // more than 6 → "Show n more"
+  await page.evaluate(([h, d]) => { for (let i = 0; i < 4; i++) window.__fake.set(`homes/${h}/calendarEvents/x${i}`, { ...window.__fake.dump()[`homes/${h}/calendarEvents/evDentist`], title: `Extra ${i}`, startDate: d, endDate: d }); }, [H, D.in3]);
+  await page.locator('#up-more').waitFor(); assert.equal(await page.locator('#up-panel .up-item').count(), 6);
+  await page.click('#up-more'); assert.equal(await page.locator('#up-panel .up-item').count(), 10); assert.equal(await page.getAttribute('#up-more', 'aria-expanded'), 'true');
+  // empty Home (after a Home change): nothing from the previous Home
+  await logout(); await seed641b(page, 'hV641BE', { tz, empty: true });
+  await login('owner@example.com'); await page.locator('#up-empty').waitFor();
+  assert.equal(await page.locator('#up-panel .up-item').count(), 0, 'nothing from the other Home');
+  for (const c of ['calendarEvents', 'commitments', 'cleaningTasks']) assert.equal(await page.evaluate((x) => window.__fake.listenerCountPrefix(x), `homes/${H}/${c}`), 0, `no ${c} listener left on the previous Home`);
+  await logout();
+  for (const c of ['calendarEvents', 'commitments', 'reminderStates']) assert.equal(await page.evaluate((x) => window.__fake.listenerCountPrefix(x), `homes/hV641BE/${c}`), 0, `logout: ${c} listeners gone`);
+  assert.deepEqual(page.errors.slice(err0), []);
+});
+
+await check('V641-B Reminders: Calendar event with a reminder (once due) and a bill join the bell / page; dismiss + snooze stored per user with their own kind; Upcoming stays independent; settings toggles; private events of others never remind', async () => {
+  await ensureSignedOut(); const err0 = page.errors.length;
+  const tz = noonZone(); const H = 'hV641BR'; const D = await seed641b(page, H, { tz });
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await login('owner@example.com'); await page.locator('.hero__home').waitFor();
+  await page.waitForFunction(() => Number((document.querySelector('#reminders-bell .bell-btn__badge') || {}).textContent) === 3);   // cleaning + Team call + Internet bill
+  await page.click('#reminders-bell'); await page.locator('#rm-counts').waitFor();
+  const call = page.locator(`.rm-item[data-key="e:evCall@${D.today}"]`); await call.waitFor();
+  assert.equal(await call.getAttribute('data-kind'), 'calendarEvent'); assert.match(await call.innerText(), new RegExp(D.soon));
+  const bill = page.locator(`.rm-item[data-key="m:cNet@${D.tom}"]`); await bill.waitFor(); assert.equal(await bill.getAttribute('data-kind'), 'commitment');
+  assert.equal(await page.locator('.rm-item:has-text("Dentist"), .rm-item:has-text("Mona secret")').count(), 0, 'no reminder set / not mine → nothing');
+  await page.click('#rm-f-calendar'); assert.equal(await page.locator('.rm-item').count(), 1); await page.click('#rm-f-bills'); assert.equal(await page.locator('.rm-item').count(), 1); await page.click('#rm-f-all');
+  await call.locator('[data-action="dismiss"]').click();
+  await page.waitForFunction((h) => Object.entries(window.__fake.dump()).some(([k, v]) => k.startsWith(`homes/${h}/reminderStates/UID_OWNER_`) && v.sourceKind === 'calendarEvent' && v.state === 'dismissed'), H);
+  await bill.locator('[data-action="snooze"]').selectOption('1');
+  await page.waitForFunction((h) => Object.entries(window.__fake.dump()).some(([k, v]) => k.startsWith(`homes/${h}/reminderStates/UID_OWNER_`) && v.sourceKind === 'commitment' && v.state === 'snoozed'), H);
+  await page.waitForFunction(() => (document.querySelector('#reminders-bell .bell-btn__badge') || {}).textContent === '1');
+  await page.goto(BASE + '#/dashboard'); await page.locator('#up-panel .up-item:has-text("Team call")').waitFor();
+  assert.equal(await page.locator('#up-panel .up-item:has-text("Internet bill")').count(), 1, 'dismissing / snoozing a reminder never hides it from Upcoming');
+  // settings: turning Calendar reminders off writes the new toggle; older prefs shape still loads
+  await page.goto(BASE + '#/reminders'); await page.click('#rm-settings-btn'); await page.locator('#rm-t-calendar').uncheck(); await page.click('#rm-save');
+  await page.waitForFunction((h) => (window.__fake.dump()[`homes/${h}/reminderPrefs/UID_OWNER`] || {}).calendar === false, H);
+  // presentation state is per user: Mona sees her own (fresh) state
+  await logout(); await login('mona@example.com'); await page.goto(BASE + '#/reminders');
+  await page.locator(`.rm-item[data-key="e:evCall@${D.today}"][data-presentation="unread"]`).waitFor();
+  await logout();
+  assert.deepEqual(page.errors.slice(err0), []);
+});
+
+await check('V641-B Contact activities: Contacts panel (no per-contact listener), add from a contact with a reminder, status Done, Calendar ⇄ contact round trip (one Back step each), viewer read-only, child without Finance sees no bills', async () => {
+  await ensureSignedOut(); const err0 = page.errors.length;
+  const tz = noonZone(); const H = 'hV641BC'; const D = await seed641b(page, H, { tz, monaRole: 'viewer' });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await login('owner@example.com'); await page.locator('.hero__home').waitFor();
+  await page.goto(BASE + '#/m/contacts'); await page.locator('#ct-upcoming .up-item').first().waitFor();
+  assert.match(await page.locator('#ct-upcoming').innerText(), /Call the plumber[\s\S]*Hassan Plumber/);
+  const calListeners = await page.evaluate((h) => window.__fake.listenerCountPrefix(`homes/${h}/calendarEvents`), H);
+  await page.locator('#ct-upcoming .up-item__btn').first().click(); await page.locator('#ct-activities .up-item').first().waitFor();
+  assert.equal(await page.evaluate((h) => window.__fake.listenerCountPrefix(`homes/${h}/calendarEvents`), H), calListeners, 'opening a contact adds no listener');
+  await page.click('#ct-act-add'); await page.locator('#cal-form #cal-f-with').waitFor();
+  assert.match(await page.locator('#cal-f-with').innerText(), /Hassan Plumber/);
+  await page.fill('#cal-f-title', 'Visit for the boiler'); await page.fill('#cal-f-sd', D.in3); await page.fill('#cal-f-ed', D.in3); await page.selectOption('#cal-f-rem', '60');
+  await page.click('dialog[open] button[form="cal-form"]'); await page.locator('#cal-form').waitFor({ state: 'detached' });
+  const created = await page.evaluate((h) => Object.values(window.__fake.dump()).find((d) => d && d.title === 'Visit for the boiler'), H);
+  assert.deepEqual([created.kind, created.contactId, created.status, created.reminderMinutes, created.audience], ['contactActivity', 'plumber01', 'planned', 60, 'household']);
+  await page.locator('#ct-activities .up-item:has-text("Visit for the boiler")').waitFor();
+  await page.locator('#ct-activities .up-item:has-text("Call the plumber") [data-action="done"]').click();
+  await page.waitForFunction((h) => window.__fake.dump()[`homes/${h}/calendarEvents/evPlumber`].status === 'done', H);
+  await page.locator('#ct-activities .up-item:has-text("Call the plumber")').waitFor({ state: 'detached' });
+  // Contact → Calendar → Contact (each one step)
+  await page.locator('#ct-activities .up-item:has-text("Visit for the boiler") [data-action="calendar"]').click();
+  await page.locator(`#cal-page [data-date="${D.in3}"][aria-selected="true"]`).waitFor();
+  await page.locator('#cal-page .cal-item:has-text("Visit for the boiler") [data-action="contact"]').click();
+  await page.locator('#ct-detail #ct-name:has-text("Hassan Plumber")').waitFor();
+  await page.click('#ct-back'); await page.locator('#ct-list').waitFor();
+  await page.goBack(); await page.locator('#cal-page').waitFor();
+  // viewer: sees activities, cannot add or change them
+  await logout(); await login('mona@example.com'); await page.goto(BASE + '#/m/contacts');
+  await page.locator('#ct-list .ct-card').first().waitFor(); await page.locator('#ct-list .ct-card:has-text("Hassan Plumber") .ct-card__open').click();
+  await page.locator('#ct-activities .up-item:has-text("Visit for the boiler")').waitFor();
+  assert.equal(await page.locator('#ct-act-add, #ct-activities [data-action="done"]').count(), 0, 'viewer: read-only');
+  await logout();
+  // child: Calendar + Cleaning yes, Finance no → no bills anywhere
+  await page.evaluate((h) => window.__fake.patch(`homes/${h}/members/UID_MONA`, { roleId: 'child' }), H);
+  await login('mona@example.com'); await page.locator('#up-panel .up-item').first().waitFor();
+  assert.equal(await page.locator('#up-panel .up-item[data-source="commitment"]').count(), 0, 'child: no Finance → no bills');
+  assert.ok(!/Internet bill|EGP/.test(await page.locator('#up-panel').innerText()));
+  await logout();
+  assert.deepEqual(page.errors.slice(err0), []);
 });
 
 await check('ADV-NIGHT routine day honours stored startHour during 00:00–03:00; no wrong-day or duplicate routine on a new session', async () => {

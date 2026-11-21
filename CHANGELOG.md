@@ -1,5 +1,13 @@
 # Changelog
 
+## 6.4.1-b — V6.4.1 Stage B: Upcoming, contact activities, Calendar / Bills reminders (November 2026) — NOT DEPLOYED, awaiting review
+
+- **Dashboard Upcoming panel:** one chronological list — overdue, today, next 7 days — across Calendar events and tasks, contact activities, bills (Finance commitments, next due date only), Cleaning (one "Pending cleaning tasks" row) and Maintenance plans. Title, date / time, category and status; each row opens its module at the right place. EN / AR, light / dark, 320 px and up; loading, error and empty states. Independent of reminder settings. The old Reminders dashboard card is not restored.
+- **Contact activities:** Calendar events can be linked to a contact (`kind: contactActivity`, `contactId`, `status` planned / done / cancelled). Contacts shows upcoming activities on the list and an Activities section on each contact (add, mark done, open in Calendar); Calendar links back to the contact. No per-contact listener.
+- **Calendar reminders:** optional reminder at the start, 15 min, 1 h or 1 day before (all-day: 09:00 Home time). They join the bell and the Reminders page once due, as do bills due within the look-ahead. Read / dismiss / snooze work as before; two new settings (Calendar, Bills). Still in-app only.
+- **One shared clock and subscription hub** for the bell, the Reminders page and the panel (no duplicate timers); released on Home switch and sign-out.
+- **Rules:** optional Calendar fields validated; reminder keys `e:` / `m:` bound to their kinds; reminder preferences accept the older and the new shape. Max rules cost unchanged (1053).
+
 ## 6.4.1-a — V6.4.1 Stage A: Contacts UI and AI JSON (November 2026) — NOT DEPLOYED, awaiting review
 
 - **Contacts list:** Import .vcf, Export .vcf, AI JSON, Manage categories and Recently deleted moved into a ⋮ menu (list only, permission-gated, keyboard and screen-reader accessible). A full-width **New contact** button sits right above the list. Category and Favourites stay side by side down to 320 px (the Favourites label collapses to the star below 380 px).

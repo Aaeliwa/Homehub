@@ -20,7 +20,12 @@ import { buildPreview, planImport, allowedActions, countPreview, separateOp } fr
 import { MEDIA_LIMITS, MENU_KINDS, menusOf, normalizeHttpsUrl, showsMenu, restaurantCategoryIds } from './contact-media.js';
 import { avatarEl, menuSection, openImageViewer } from './media-ui.js';
 import { icon } from '../../ui/components/icons.js';
-import { createContactsNav } from './contacts-nav.js';
+import { createContactsNav, takeContactsFocus } from './contacts-nav.js';
+import { getCalendarStore } from '../calendar/calendar-service.js';
+import { setCalendarFocus } from '../calendar/calendar-focus.js';
+import { eventForm, reminderText } from '../calendar/calendar-ui.js';
+import { calendarItems, sortItems, CONTACT_HORIZON } from '../../core/upcoming/upcoming-model.js';
+import { todayIn, formatDateLong } from '../expenses/calendar.js';
 import { ellipsisMenu, paint, waIcon, chooseNumber } from './contacts-ui.js';
 import { parseContactsJson, exportContactsJson, jsonFileName, exampleText, schemaText, aiPrompt, conflictPairs, JSON_LIMITS } from './contacts-json.js';
 
@@ -28,6 +33,11 @@ export function mount(outlet, ctx) {
   const state = ctx.getState(); const can = (p) => state.permissions.can(p);
   let store;
   try { store = getContactsStore(ctx); } catch (e) { outlet.replaceChildren(h('div', { class: 'page' }, banner('error', errorText(e)))); return () => {}; }
+  // V6.4.1 Stage B: contact activities come from the SHARED Calendar store (household + my private events;
+  // no per-contact listener). Without calendar.view there is no activity UI at all.
+  let cal = null; try { cal = getCalendarStore(ctx, { optional: true }); } catch { cal = null; }
+  const A = { view: !!cal, create: !!cal && can('calendar.create'), edit: !!cal && can('calendar.edit') };
+  const homeToday = () => todayIn(state.home.timezone);
   const P = { create: can('contacts.create'), edit: can('contacts.edit'), del: can('contacts.delete'), imp: can('contacts.import'), exp: can('contacts.export'), cats: can('contacts.manageCategories') };
   let view = 'list'; let sel = null; let q = ''; let cat = 'all'; let favOnly = false; let imp = null; let deleted = null;
   // V6.4 C: Menu section state survives re-renders (per contact); the viewer lives outside the page body
@@ -69,6 +79,7 @@ export function mount(outlet, ctx) {
   { const saved = nav.savedList(); const init = nav.current();
     if (saved && !init) { q = saved.q; cat = saved.cat; favOnly = saved.fav; pendingScroll = saved.y; }
     if (init && allowed(init.v)) { view = init.v; sel = init.id || null; if (init.v === 'import') imp = { kind: 'vcf', stage: 'pick' }; if (init.v === 'json') json = { scope: 'all', picked: new Set(), text: '' }; } }
+  { const f = takeContactsFocus(state.home.id); if (f && !nav.current()) { nav.open({ v: 'detail', id: f.contactId }, listState()); view = 'detail'; sel = f.contactId; } }
   const root = h('div', { class: 'page page--contacts accent-rose', id: 'ct-page' }); const body = h('div', { class: 'ct-body', id: 'ct-body' });
   root.append(body); outlet.replaceChildren(root);
   const msg = (e) => t(e && e.detail && /^contacts\./.test(e.detail) ? e.detail : e && /permission/i.test(String(e.code)) ? 'contacts.err.denied' : 'contacts.err.save');
@@ -169,8 +180,7 @@ export function mount(outlet, ctx) {
           h('button', { type: 'button', class: ['btn', 'btn--secondary', 'ct-favfilter', favOnly && 'is-on'], id: 'ct-fav-filter', 'aria-pressed': String(favOnly), 'aria-label': t('contacts.favoritesOnly'),
             onClick: (e) => { favOnly = !favOnly; e.currentTarget.setAttribute('aria-pressed', String(favOnly)); e.currentTarget.classList.toggle('is-on', favOnly); renderList(); saveListSoon(); } },
             h('span', { 'aria-hidden': 'true' }, '★'), h('span', { class: 'ct-favfilter__text' }, ` ${t('contacts.favoritesOnly')}`)))),
-      // Stage B fills this panel (upcoming contact activities); hidden until then — no placeholder content
-      h('section', { class: 'ct-upcoming', id: 'ct-upcoming', hidden: true }),
+      upcomingPanel(),
       count,
       P.create ? h('button', { type: 'button', class: 'btn btn--primary ct-new', id: 'ct-new', disabled: snap.atLimit, title: snap.atLimit ? t('contacts.err.atLimit') : null, onClick: () => editor(null) }, `＋ ${t('contacts.new')}`) : null,
       list, empty);
@@ -231,8 +241,52 @@ export function mount(outlet, ctx) {
         c.address ? h('div', null, h('dt', null, t('contacts.f.address')), h('dd', { dir: 'auto', class: 'ct-pre' }, c.address)) : null,
         c.notes ? h('div', { class: 'ct-facts__wide' }, h('dt', null, t('contacts.f.notes')), h('dd', { dir: 'auto', class: 'ct-pre', id: 'ct-notes' }, c.notes)) : null),
       // (V6.4.1: the dialer explanation was removed; Edit / Export / Delete live in the "⋮" menu above)
+      A.view ? activitySection(c) : null,
     );
   }
+
+  // ------------------------------------------------------------------ V6.4.1 Stage B: activities
+  const calEvents = () => { const k = cal && cal.getSnapshot(); return k && k.status === 'ready' ? k.events : null; };
+  const whenText = (it) => [it.bucket === 'today' ? t('upcoming.today') : formatDateLong(it.startDate, getLocale()), it.time].filter(Boolean).join(' · ');
+  const openInCalendar = (it) => { setCalendarFocus({ homeId: state.home.id, date: it.startDate, eventId: it.id }); ctx.navigate('/m/calendar'); };
+  /** List page: upcoming activities across contacts (overdue + next 30 days). Hidden when there are none. */
+  function upcomingPanel() {
+    const evs = calEvents();
+    const items = evs ? sortItems(calendarItems(evs.filter((e) => e.kind === 'contactActivity'), { today: homeToday(), horizonDays: CONTACT_HORIZON })) : [];
+    if (!items.length) return h('section', { class: 'ct-upcoming', id: 'ct-upcoming', hidden: true });
+    const MAX = 5;
+    return h('section', { class: 'card ct-upcoming', id: 'ct-upcoming', 'aria-labelledby': 'ct-upcoming-title' },
+      h('h2', { class: 'card__title ct-upcoming__title', id: 'ct-upcoming-title' }, t('contacts.act.upcoming')),
+      h('ul', { class: 'up-list' }, items.slice(0, MAX).map((it) => {
+        const c = store.contact(it.contactId);
+        return h('li', { class: `up-item up-item--${it.bucket}`, dataset: { key: it.key, bucket: it.bucket } },
+          h('button', { type: 'button', class: 'up-item__btn', onClick: () => (c ? openDetail(c.id) : openInCalendar(it)) },
+            h('span', { class: 'up-item__title', dir: 'auto' }, it.title),
+            h('span', { class: 'up-item__meta' }, [c ? c.name : t('contacts.act.removedContact'), whenText(it), it.private ? `🔒 ${t('calendar.private')}` : null].filter(Boolean).join(' · ')),
+            it.bucket === 'overdue' ? h('span', { class: 'pill pill--warn' }, t('upcoming.overdue')) : null));
+      })),
+      items.length > MAX ? h('p', { class: 'field__hint' }, t('contacts.act.more', { n: items.length - MAX })) : null);
+  }
+  /** Details: this contact's activities (overdue + next 30 days) and "Add activity". */
+  function activitySection(c) {
+    const evs = calEvents();
+    const items = evs ? sortItems(calendarItems(evs, { today: homeToday(), horizonDays: CONTACT_HORIZON, contactId: c.id })) : [];
+    const mine = (it) => { const e = cal.event(it.id); return e && (e.audience === 'household' || e.createdBy === state.identity.uid); };
+    return h('section', { class: 'ct-acts', id: 'ct-activities', 'aria-labelledby': 'ct-act-title' },
+      h('div', { class: 'card__head' }, h('h3', { class: 'card__title', id: 'ct-act-title' }, t('contacts.act.title')),
+        A.create ? h('button', { type: 'button', class: 'btn btn--secondary btn--sm', id: 'ct-act-add',
+          onClick: () => eventForm({ store: cal, container: root, preset: { kind: 'contactActivity', contactId: c.id, contactName: c.name, startDate: homeToday(), status: 'planned', reminderMinutes: null } }) }, `＋ ${t('contacts.act.add')}`) : null),
+      !evs ? h('p', { class: 'muted', role: 'status' }, t('common.loading'))
+        : items.length ? h('ul', { class: 'up-list', id: 'ct-act-list' }, items.map((it) => h('li', { class: `up-item up-item--${it.bucket}`, dataset: { key: it.key, bucket: it.bucket, event: it.id } },
+          h('span', { class: 'up-item__text' }, h('span', { class: 'up-item__title', dir: 'auto' }, it.title),
+            h('span', { class: 'up-item__meta' }, [whenText(it), it.reminderMinutes !== null ? `🔔 ${reminderText(it.reminderMinutes)}` : null, it.private ? `🔒 ${t('calendar.private')}` : null].filter(Boolean).join(' · ')),
+            it.bucket === 'overdue' ? h('span', { class: 'pill pill--warn' }, t('upcoming.overdue')) : null),
+          h('span', { class: 'up-item__actions' },
+            A.edit && mine(it) ? h('button', { type: 'button', class: 'btn btn--ghost btn--sm', 'data-action': 'done', onClick: run(() => cal.setStatus(it.id, 'done'), 'contacts.act.doneToast') }, t('calendar.markDone')) : null,
+            h('button', { type: 'button', class: 'btn btn--ghost btn--sm', 'data-action': 'calendar', onClick: () => openInCalendar(it) }, t('contacts.act.inCalendar'))))))
+          : h('p', { class: 'empty', id: 'ct-act-empty' }, t('contacts.act.none')));
+  }
+  const actKey = (id) => { const evs = calEvents(); return evs ? evs.filter((e) => e.contactId === id).map((e) => `${e.id}:${e.rev}`).join(',') + homeToday() : 'loading'; };
   async function removeContact(c) {
     if (!(await confirmDialog({ title: t('contacts.deleteTitle', { name: c.name }), message: t('contacts.deleteBody'), confirmLabel: t('contacts.delete'), container: root }))) return;
     try { await store.deleteContact(c.id); toast(t('contacts.deleted.done'), { tone: 'success' }); if (view === 'detail' && sel === c.id) goBack(); } catch (e) { toast(msg(e), { tone: 'error' }); }
@@ -600,7 +654,7 @@ export function mount(outlet, ctx) {
         view = 'list'; sel = null;
       } else {
         // same contact revision + same categories → nothing to redraw (open menu previews are not reloaded)
-        const key = JSON.stringify([c.id, c.rev, snap.categories.map((k) => [k.id, k.rev, k.name]), snap.atLimit, snap.truncated]);
+        const key = JSON.stringify([c.id, c.rev, snap.categories.map((k) => [k.id, k.rev, k.name]), snap.atLimit, snap.truncated, A.view ? actKey(c.id) : 0]);
         if (key === detailKey && body.querySelector('#ct-detail')) return;
         detailKey = key; paint(body, header(), detailView(c)); return;
       }
@@ -623,5 +677,7 @@ export function mount(outlet, ctx) {
     if (pendingScroll !== null) { const y = pendingScroll; pendingScroll = null; requestAnimationFrame(() => window.scrollTo(0, y)); }
   }
   const off = store.subscribe(() => { if (imp && imp.busy) return; render(); });
-  return () => { off(); nav.dispose(); for (const m of body.querySelectorAll('.ct-more')) m.ctMore.close(false); clearTimeout(saveTimer); if (viewer) viewer.finish('unmount'); };   // route change / household switch / sign-out / re-render
+  // Stage B: activity changes redraw only the list (panel) and details — never an import / JSON / form in progress
+  const offCal = cal ? cal.subscribe(() => { if ((view === 'list' || view === 'detail') && !(imp && imp.busy)) render(); }) : () => {};
+  return () => { off(); offCal(); nav.dispose(); for (const m of body.querySelectorAll('.ct-more')) m.ctMore.close(false); clearTimeout(saveTimer); if (viewer) viewer.finish('unmount'); };   // route change / household switch / sign-out / re-render
 }

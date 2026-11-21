@@ -18,6 +18,27 @@ export const TYPES = Object.freeze(['work', 'vacation', 'task', 'reminder', 'oth
 export const SHIFTS = Object.freeze(['day', 'night']);
 export function detectShift(title) { const m = /^\s*(day|night)\s+shift(?![a-z])/i.exec(String(title || '')); return m ? m[1].toLowerCase() : null; }
 export const shiftOf = (e) => (e && e.shift !== undefined ? (SHIFTS.includes(e.shift) ? e.shift : null) : detectShift(e && e.title));
+/**
+ * V6.4.1 Stage B — optional contact-activity / reminder fields. Older events have none of them and read as
+ * an ordinary event without a reminder (nothing is rewritten):
+ *   kind             null = ordinary event · 'contactActivity' = an activity with a household contact
+ *   contactId        the linked contact's id (format-checked only; a removed contact never rewrites the event)
+ *   status           'planned' | 'done' | 'cancelled' for activities, null otherwise (a task's `done` is separate)
+ *   reminderMinutes  null = no reminder · 0 / 15 / 60 / 1440 minutes before the start (all-day: 09:00 Home time)
+ */
+export const KINDS = Object.freeze(['contactActivity']);
+export const STATUSES = Object.freeze(['planned', 'done', 'cancelled']);
+export const REMINDER_OFFSETS = Object.freeze([0, 15, 60, 1440]);
+export const ALL_DAY_REFERENCE = '09:00';
+const CONTACT_ID = /^[A-Za-z0-9_-]{6,40}$/;
+export const kindOf = (e) => (e && KINDS.includes(e.kind) ? e.kind : null);
+export const isActivity = (e) => kindOf(e) === 'contactActivity';
+export const statusOf = (e) => (isActivity(e) ? (STATUSES.includes(e.status) ? e.status : 'planned') : null);
+export const reminderOf = (e) => (e && REMINDER_OFFSETS.includes(e.reminderMinutes) ? e.reminderMinutes : null);
+/** Open = still to be done: an undone task or a planned activity. Plain events are never "open" / overdue. */
+export const isOpenItem = (e) => (isActivity(e) ? statusOf(e) === 'planned' : e.type === 'task' ? !e.done : false);
+/** Local start "HH:MM" used for ordering and reminders (all-day → 09:00 reference). */
+export const startClock = (e) => (e.allDay ? ALL_DAY_REFERENCE : e.startTime || ALL_DAY_REFERENCE);
 export const LIMITS = Object.freeze({ title: 120, description: 1000, location: 200, importRows: 500, importBytes: 200000 });
 const TIME = /^([01]\d|2[0-3]):[0-5]\d$/;
 const fail = (detail, fields) => Object.assign(new Error(detail), { code: 'validation', detail, fields });
@@ -44,11 +65,25 @@ export function validateEvent(input = {}) {
   const description = txt(input.description); if (description.length > LIMITS.description) errors.description = 'calendar.err.tooLong';
   const location = txt(input.location); if (location.length > LIMITS.location) errors.location = 'calendar.err.tooLong';
   const audience = input.audience === 'private' ? 'private' : 'household';
-  return { value: { title, type, shift, allDay, startDate, startTime, endDate, endTime, description: description || null, location: location || null, audience }, errors };
+  const kind = KINDS.includes(input.kind) ? input.kind : null;
+  let contactId = null; let status = null;
+  if (kind === 'contactActivity') {
+    contactId = typeof input.contactId === 'string' && CONTACT_ID.test(input.contactId) ? input.contactId : null;
+    if (!contactId) errors.contact = 'calendar.err.contact';
+    status = STATUSES.includes(input.status) ? input.status : 'planned';
+  }
+  const reminderMinutes = REMINDER_OFFSETS.includes(Number(input.reminderMinutes)) && input.reminderMinutes !== null && input.reminderMinutes !== '' ? Number(input.reminderMinutes) : null;
+  return { value: { title, type, shift, allDay, startDate, startTime, endDate, endTime, description: description || null, location: location || null, audience,
+    kind, contactId, status, reminderMinutes }, errors };
 }
-export const EDITABLE = Object.freeze(['title', 'type', 'shift', 'allDay', 'startDate', 'startTime', 'endDate', 'endTime', 'description', 'location']);
+/** Fields a CSV re-import restores (V6.2.1 rule set — the Stage B fields are never part of an import). */
+const IMPORTABLE = Object.freeze(['title', 'type', 'shift', 'allDay', 'startDate', 'startTime', 'endDate', 'endTime', 'description', 'location']);
+export const EDITABLE = Object.freeze([...IMPORTABLE, 'kind', 'contactId', 'status', 'reminderMinutes']);
 export function createDoc(v, { uid, now, timezone, source = 'manual', sourceKey = null, importBatchId = null }) {
-  return { ...v, timezone, done: false, source, sourceKey, importBatchId, importRev: importBatchId ? 1 : null,
+  const base = { ...v };
+  // Stage B fields: written only when used (an ordinary event keeps the exact V6.2 document shape).
+  for (const k of ['kind', 'contactId', 'status', 'reminderMinutes']) if (base[k] === null || base[k] === undefined || source !== 'manual') delete base[k];
+  return { ...base, timezone, done: false, source, sourceKey, importBatchId, importRev: importBatchId ? 1 : null,
     deletedAt: null, deletedBy: null, rev: 1, createdBy: uid, createdAt: now, updatedBy: uid, updatedAt: now, schemaVersion: 1 };
 }
 
@@ -75,7 +110,7 @@ export function removalPlan(all, batchId, { keepEdited = true } = {}) {
 }
 /** Re-import of a previously removed row (same fingerprint id): restore it into the NEW batch. */
 export function reviveDoc(cur, v, { uid, now, importBatchId }) {
-  const p = {}; for (const k of EDITABLE) p[k] = v[k] ?? null;
+  const p = {}; for (const k of IMPORTABLE) p[k] = v[k] ?? null;
   const rev = (cur.rev || 1) + 1;
   return { ...p, done: false, deletedAt: null, deletedBy: null, importBatchId, importRev: rev, rev, updatedBy: uid, updatedAt: now };
 }

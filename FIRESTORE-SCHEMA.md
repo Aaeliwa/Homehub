@@ -471,14 +471,15 @@ None needed in Phases 1–4 (`firestore.indexes.json` is empty). Rooms and devic
 
 **`reminderStates/{uid}_{fnv64(key)}`:**
 - `ownerUid`;
-- `key` (`c:` / `p:` / `f:` …, ≤ 200);
+- `key` (`c:` / `p:` / `f:`; V6.4.1 Stage B adds `e:` Calendar event, `m:` commitment; ≤ 200);
 - `state` (read | dismissed | snoozed), `snoozeUntil` (YYYY-MM-DD when snoozed);
-- `sourceKind`, `updatedAt`, `schemaVersion`.
+- `sourceKind` (bound to the key prefix: cleaning / maintenancePlan / maintenanceFault / calendarEvent / commitment), `updatedAt`, `schemaVersion`.
 - Owner-only read / list / write / delete.
 
 **`reminderPrefs/{uid}`:**
 - `lookAheadDays` (1 / 3 / 7 / 14);
 - `cleaning`, `maintenancePlans`, `maintenanceFaults` (bool);
+- V6.4.1 Stage B, optional: `calendar`, `commitments` (bool; absent = on — older documents stay valid);
 - `quietStart`, `quietEnd` (0–23 | null);
 - `updatedAt`, `schemaVersion`.
 - Owner-only.
@@ -543,3 +544,16 @@ Two OPTIONAL keys on `homes/{h}/contacts/{contactId}`. Contacts written before 6
 - Only change to stored data: `contacts.source` accepts `json` in addition to `manual` / `vcf` (rules contacts create cost 1053, budget 1100). Existing documents are untouched.
 - The portable JSON file (`{ "schema": "homehub.contacts", "version": 1, "items": [...] }`) exists only on the user's device; it contains no ids, audit fields, timestamps, household identifiers, roles, deleted contacts or Calendar data. Categories travel by NAME: suggested categories are recognised in English or Arabic and map back to the same `s_<key>` id; custom categories match by name; unknown names are reported and never created.
 - In-page Contacts navigation uses `history.state` markers on the same URL (`ctNav`, `ctList`) — nothing is persisted.
+
+### V6.4.1 Stage B: Upcoming, contact activities, Calendar / Finance reminders (no new collection, no migration)
+
+**`calendarEvents` — optional fields** (absent on older events = an ordinary event without a reminder; nothing is rewritten):
+- `kind`: absent / `null`, or `'contactActivity'`;
+- `contactId`: the linked contact id (`^[A-Za-z0-9_-]{6,40}$`) — required for an activity, `null` otherwise. Format-checked only (no read per write); a deleted contact never rewrites the event;
+- `status`: `'planned'` / `'done'` / `'cancelled'` — activities only (`null` otherwise). A task's `done` is unchanged and separate;
+- `reminderMinutes`: `null` (none) / `0` / `15` / `60` / `1440` minutes before the start; all-day events use 09:00 Home time of the start date.
+- Written only when used (manual events); CSV imports and re-imports never carry them. Visibility is unchanged: household events with `calendar.view`, private events to their creator only.
+
+**Derived, never stored:** the Dashboard Upcoming panel, the Contacts activity panels and Calendar / Finance reminders are computed client-side from the stores already loaded for the current Home.
+
+**Rules cost:** calendarEvents create 617 → 691, update 507 → 554; reminderStates / reminderPrefs remain small; maximum unchanged at 1053 (contacts create), 0 rules above 1100.

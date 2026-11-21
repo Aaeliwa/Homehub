@@ -2,7 +2,7 @@
 import { stateDocId, prefsOf, LOOK_AHEAD } from './reminders-model.js';
 
 const STATES = 'reminderStates'; const PREFS = 'reminderPrefs';
-const KIND = { c: 'cleaning', p: 'maintenancePlan', f: 'maintenanceFault' };
+const KIND = { c: 'cleaning', p: 'maintenancePlan', f: 'maintenanceFault', e: 'calendarEvent', m: 'commitment' };   // V6.4.1 Stage B: e / m
 
 export function createRemindersStore({ homeId, uid, repo }) {
   let states = []; let prefsDoc; const st = { s: 'loading', p: 'loading' }; let lastError = null; let disposed = false;
@@ -22,7 +22,7 @@ export function createRemindersStore({ homeId, uid, repo }) {
     getSnapshot: snapshot,
     /** read | dismissed | snoozed (until a Home date). Presentation only — never source data. */
     async mark(key, state, snoozeUntil = null) {
-      guard();
+      guard(); if (!KIND[key[0]] || key[1] !== ':') throw Object.assign(new Error('reminders.err.key'), { detail: 'reminders.err.key' });
       await repo.commit(homeId, [{ mode: 'set', name: STATES, id: stateDocId(uid, key), data: {
         ownerUid: uid, key, state, snoozeUntil: state === 'snoozed' ? snoozeUntil : null, sourceKind: KIND[key[0]], updatedAt: repo.now(), schemaVersion: 1 } }]);
     },
@@ -33,7 +33,7 @@ export function createRemindersStore({ homeId, uid, repo }) {
       guard();
       if (!LOOK_AHEAD.includes(p.lookAheadDays)) throw Object.assign(new Error('reminders.err.prefs'), { detail: 'reminders.err.prefs' });
       await repo.commit(homeId, [{ mode: 'set', name: PREFS, id: uid, data: { lookAheadDays: p.lookAheadDays, cleaning: !!p.cleaning, maintenancePlans: !!p.maintenancePlans,
-        maintenanceFaults: !!p.maintenanceFaults, quietStart: Number.isInteger(p.quietStart) ? p.quietStart : null, quietEnd: Number.isInteger(p.quietEnd) ? p.quietEnd : null,
+        maintenanceFaults: !!p.maintenanceFaults, calendar: p.calendar !== false, commitments: p.commitments !== false, quietStart: Number.isInteger(p.quietStart) ? p.quietStart : null, quietEnd: Number.isInteger(p.quietEnd) ? p.quietEnd : null,
         updatedAt: repo.now(), schemaVersion: 1 } }]);
     },
     listenerCount: () => stops.length,

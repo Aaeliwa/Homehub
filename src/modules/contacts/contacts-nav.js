@@ -65,3 +65,11 @@ export function createContactsNav({ onChange, win = window }) {
     dispose() { win.removeEventListener('popstate', onPop); },
   });
 }
+
+/**
+ * V6.4.1 Stage B — Calendar / Upcoming → a contact's details: a Home-scoped, READ-ONCE intent (nothing in the
+ * URL; ignored for another Home). The Contacts page consumes it on mount and opens the details as ONE entry.
+ */
+let focus = null;
+export function setContactsFocus({ homeId, contactId }) { focus = homeId && typeof contactId === 'string' && ID.test(contactId) ? Object.freeze({ homeId, contactId }) : null; }
+export function takeContactsFocus(homeId) { const f = focus; focus = null; return f && f.homeId === homeId ? f : null; }

@@ -50,4 +50,6 @@ window.__fake = {
   totalOf: (prefix) => Object.entries(state.db).filter(([p, d]) => p.startsWith(prefix) && d.status !== 'void').reduce((s, [, d]) => s + (d.amountMinor || 0), 0),
   put(path, data) { state.db[path] = { ...data }; persist(); notify(path); },
   remove(path) { delete state.db[path]; persist(); notify(path); },
+  /** V6.4.1 B: listeners on paths matching this regex (string) fail with 'unavailable'; null clears. Re-fires them. */
+  failOn(re) { state.failOn = re || null; for (const ls of state.docListeners.values()) for (const fn of [...ls]) fn(); },
 };

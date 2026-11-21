@@ -6,6 +6,7 @@
 import { h } from '../../core/utils/dom.js';
 import { t } from '../../core/i18n/i18n.js';
 import { icon } from '../components/icons.js';
+import { canSeeReminders } from '../../core/upcoming/access.js';
 import { brandMark, roleLabel, initials } from '../components/common.js';
 
 function navItems(registry, permissions) {
@@ -25,7 +26,7 @@ function isActive(item, route) {
 
 export function appShell({ state, registry, session, prefs, route }) {
   const perms = state.permissions;
-  const bellEl = perms && (perms.can('cleaning.view') || perms.can('maintenance.view'))
+  const bellEl = perms && canSeeReminders(perms)   // V6.4.1 Stage B: also Calendar / Finance
     ? h('a', { class: 'bell-btn', href: '#/reminders', id: 'reminders-bell', 'aria-label': t('reminders.title') },
       icon('bell', { size: 16 }), h('span', { class: 'bell-btn__badge', hidden: true, 'aria-hidden': 'true' }))
     : null;

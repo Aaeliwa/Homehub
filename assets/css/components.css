@@ -267,3 +267,26 @@ textarea.input { font: inherit; }
 .facts__count { font-weight: 700; }
 .facts__note { display: block; font-size: 0.78rem; font-weight: 600; color: var(--warn); }
 .facts__note:empty { display: none; }
+
+/* ===================================================================== V6.4.1 Stage B — Upcoming lists
+   Dashboard panel (#up-panel) and the Contacts activity panels share these rows. Logical properties only,
+   so RTL mirrors itself; rows are ≥ 48 px tap targets; the status pill never wraps under the title. */
+.up-slot { margin-block: 1.25rem; }
+.up-card .card__head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 0.25rem 1rem; }
+.up-group + .up-group { margin-block-start: 0.75rem; }
+.up-group__title { font-size: 0.8rem; font-weight: 700; letter-spacing: 0.02em; text-transform: uppercase; color: var(--muted); margin: 0 0 0.35rem; }
+.up-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.35rem; }
+.up-item { display: flex; align-items: center; gap: 0.5rem; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); min-inline-size: 0; }
+.up-item--overdue { border-inline-start: 4px solid var(--warn); }
+.up-item--today { border-inline-start: 4px solid var(--focus); }
+.up-item__btn { all: unset; box-sizing: border-box; display: flex; align-items: center; gap: 0.6rem; inline-size: 100%; min-block-size: 48px; padding: 0.45rem 0.7rem; cursor: pointer; border-radius: inherit; min-inline-size: 0; }
+.up-item__btn:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.up-item__btn:hover { background: var(--bg); }
+.up-item__icon { flex: 0 0 auto; font-size: 1.1rem; line-height: 1; }
+.up-item__text { display: flex; flex-direction: column; min-inline-size: 0; flex: 1 1 auto; padding-block: 0.15rem; }
+.up-item > .up-item__text { padding-inline: 0.7rem; }
+.up-item__title { font-weight: 600; overflow-wrap: anywhere; }
+.up-item__meta { font-size: 0.82rem; color: var(--muted); overflow-wrap: anywhere; }
+.up-item__status { flex: 0 0 auto; white-space: nowrap; }
+.up-item__actions { display: flex; flex-wrap: wrap; gap: 0.25rem; padding-inline-end: 0.4rem; flex: 0 0 auto; }
+@media (max-width: 380px) { .up-item__status { display: none; } .up-item--overdue .up-item__status { display: inline-flex; } }

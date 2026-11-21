@@ -9,7 +9,7 @@ import { confirmDialog } from '../../ui/components/dialog.js';
 import { formDialog, val } from '../expenses/dialogs.js';
 import { field, select } from '../expenses/finance-ui.js';
 import { formatMonth, formatDateLong } from '../expenses/calendar.js';
-import { monthGrid, eventsOn, TYPES, LIMITS, weekOf, weekBars, isMultiDay, shiftOf, SHIFTS } from './calendar-model.js';
+import { monthGrid, eventsOn, TYPES, LIMITS, weekOf, weekBars, isMultiDay, shiftOf, SHIFTS, isActivity, statusOf, reminderOf, REMINDER_OFFSETS } from './calendar-model.js';
 
 export const COLORS = Object.freeze({ work: 'blue', vacation: 'green', task: 'amber', reminder: 'purple', other: 'gray' });
 /** V6.2.2: Day Shift = blue, Night Shift = purple; otherwise the type colour. */
@@ -33,6 +33,12 @@ const F = (...a) => field(...a).root;
 const fmtDay = (d) => { try { return new Intl.DateTimeFormat(getLocale(), { weekday: 'short', timeZone: 'UTC' }).format(new Date(`${d}T12:00:00Z`)); } catch { return d; } };
 export const weekdayLabels = () => weekOf('2026-11-16').map(fmtDay);   // Monday-first
 export const msg = (e) => t(e && e.detail && /^calendar\./.test(e.detail) ? e.detail : 'calendar.err.save');
+
+/** Stage B: "15 minutes before" etc. */
+export const reminderText = (m) => (m === null || m === undefined ? t('calendar.rem.none') : t(`calendar.rem.m${m}`));
+export function reminderSelect(value) {
+  return select('cal-f-rem', [{ value: '', label: t('calendar.rem.none') }, ...REMINDER_OFFSETS.map((m) => ({ value: String(m), label: t(`calendar.rem.m${m}`) }))], value === null || value === undefined ? '' : String(value));
+}
 
 export function timeText(e) {
   if (e.allDay) return t('calendar.allDay');
@@ -89,7 +95,8 @@ export function legend() {
 }
 
 /** A day's agenda with edit / delete / done as permitted. */
-export function agenda({ store, date, events, can, uid, container, id = 'cal-agenda' }) {
+export function agenda({ store, date, events, can, uid, container, id = 'cal-agenda', openContact = null }) {
+  const contactLink = can('contacts.view') && typeof openContact === 'function';
   const list = eventsOn(events, date);
   return h('section', { class: 'cal-agenda', id, 'aria-label': formatDateLong(date, getLocale()) },
     h('h3', { class: 'cal-agenda__title' }, formatDateLong(date, getLocale())),
@@ -101,8 +108,16 @@ export function agenda({ store, date, events, can, uid, container, id = 'cal-age
       h('span', { class: `cal-dot cal-c-${colorOf(e)}`, 'aria-hidden': 'true' }),
       h('span', { class: 'fin-row__main', dir: 'auto' }, ...(shiftOf(e) ? [h('span', { class: `cal-t-${colorOf(e)}` }, shiftIcon(shiftOf(e))), ' '] : []), e.title,
         h('span', { class: 'fin-row__sub' }, [shiftOf(e) ? t(`calendar.shift.${shiftOf(e)}`) : t(`calendar.type.${e.type}`), timeText(e), e.audience === 'private' ? `🔒 ${t('calendar.private')}` : null,
-          e.type === 'task' ? t(e.done ? 'calendar.done' : 'calendar.open') : null, e.location].filter(Boolean).join(' · '))),
+          e.type === 'task' ? t(e.done ? 'calendar.done' : 'calendar.open') : null,
+          isActivity(e) ? `👤 ${t('calendar.activity')} · ${t(`calendar.status.${statusOf(e)}`)}` : null,
+          reminderOf(e) !== null ? `🔔 ${reminderText(reminderOf(e))}` : null, e.location].filter(Boolean).join(' · '))),
       h('span', { class: 'cl-item__actions' },
+        isActivity(e) && mayEdit && statusOf(e) !== 'done' ? h('button', { type: 'button', class: 'btn btn--ghost btn--sm', 'data-action': 'status-done',
+          onClick: run(() => store.setStatus(e.id, 'done')) }, t('calendar.markDone')) : null,
+        isActivity(e) && mayEdit && statusOf(e) !== 'planned' ? h('button', { type: 'button', class: 'btn btn--ghost btn--sm', 'data-action': 'status-planned',
+          onClick: run(() => store.setStatus(e.id, 'planned')) }, t('calendar.reopen')) : null,
+        isActivity(e) && contactLink ? h('button', { type: 'button', class: 'btn btn--ghost btn--sm', 'data-action': 'contact', 'aria-label': t('calendar.openContactX', { title: e.title }),
+          onClick: () => openContact(e.contactId) }, '👤') : null,
         e.type === 'task' && mayEdit ? h('button', { type: 'button', class: 'btn btn--ghost btn--sm', 'data-action': 'done', 'aria-pressed': String(!!e.done),
           onClick: run(() => store.setDone(e.id, !e.done)) }, t(e.done ? 'calendar.reopen' : 'calendar.markDone')) : null,
         mayEdit ? h('button', { type: 'button', class: 'btn btn--ghost btn--sm', 'data-action': 'edit', 'aria-label': t('calendar.editX', { title: e.title }), onClick: () => eventForm({ store, container, event: e }) }, '✎') : null,
@@ -115,10 +130,12 @@ const run = (fn) => async (ev) => { const b = ev && ev.currentTarget; if (b) b.d
 
 /** Create / edit dialog. preset: { startDate, endDate, type }. */
 export function eventForm({ store, container, event = null, preset = {} }) {
-  const v = event || { title: '', type: 'other', allDay: true, startDate: preset.startDate, endDate: preset.endDate || preset.startDate, startTime: '09:00', endTime: '10:00', description: '', location: '', audience: 'household', ...preset };
+  const v = event || { title: '', type: 'other', allDay: true, startDate: preset.startDate, endDate: preset.endDate || preset.startDate, startTime: '09:00', endTime: '10:00', description: '', location: '', audience: 'household', kind: null, contactId: null, status: null, reminderMinutes: null, ...preset };
+  const activity = isActivity(v);
   const allDayBox = h('input', { type: 'checkbox', id: 'cal-f-allday', checked: v.allDay, onChange: (e) => { for (const el of document.querySelectorAll('#cal-form .cal-time')) el.hidden = e.target.checked; } });
-  formDialog({ title: t(event ? 'calendar.edit' : 'calendar.new'), id: 'cal-form', submitLabel: t('common.save'), container,
-    fields: [F(t('calendar.title'), h('input', { id: 'cal-f-title', class: 'input', maxlength: LIMITS.title, dir: 'auto', value: v.title }), { id: 'cal-f-title' }),
+  formDialog({ title: t(event ? (activity ? 'calendar.editActivity' : 'calendar.edit') : (activity ? 'calendar.newActivity' : 'calendar.new')), id: 'cal-form', submitLabel: t('common.save'), container,
+    fields: [activity ? h('p', { class: 'cal-form__with', id: 'cal-f-with' }, `👤 ${preset.contactName ? t('calendar.withX', { name: preset.contactName }) : t('calendar.activity')}`) : null,
+      F(t('calendar.title'), h('input', { id: 'cal-f-title', class: 'input', maxlength: LIMITS.title, dir: 'auto', value: v.title }), { id: 'cal-f-title' }),
       F(t('calendar.typeLabel'), select('cal-f-type', TYPES.map((k) => ({ value: k, label: t(`calendar.type.${k}`) })), v.type), { id: 'cal-f-type' }),
       // V6.2.2: Auto = from the title ("Day Shift" / "Night Shift"); an explicit choice overrides it.
       F(t('calendar.shift.label'), select('cal-f-shift', [{ value: 'auto', label: t('calendar.shift.auto') }, { value: 'none', label: t('calendar.shift.none') },
@@ -129,6 +146,8 @@ export function eventForm({ store, container, event = null, preset = {} }) {
         h('div', { class: 'cal-time', hidden: v.allDay }, F(t('calendar.startTime'), h('input', { id: 'cal-f-st', type: 'time', class: 'input', value: v.startTime || '09:00' }), { id: 'cal-f-st' })),
         F(t('calendar.end'), h('input', { id: 'cal-f-ed', type: 'date', class: 'input', value: v.endDate }), { id: 'cal-f-ed' }),
         h('div', { class: 'cal-time', hidden: v.allDay }, F(t('calendar.endTime'), h('input', { id: 'cal-f-et', type: 'time', class: 'input', value: v.endTime || '10:00' }), { id: 'cal-f-et' }))),
+      F(t('calendar.rem.label'), reminderSelect(v.reminderMinutes ?? null), { id: 'cal-f-rem', hint: v.allDay ? t('calendar.rem.allDayHint') : null }),
+      activity && event ? F(t('calendar.status.label'), select('cal-f-status', ['planned', 'done', 'cancelled'].map((k) => ({ value: k, label: t(`calendar.status.${k}`) })), statusOf(v)), { id: 'cal-f-status' }) : null,
       F(t('calendar.location'), h('input', { id: 'cal-f-loc', class: 'input', maxlength: LIMITS.location, dir: 'auto', value: v.location || '' }), { id: 'cal-f-loc' }),
       F(t('calendar.description'), h('textarea', { id: 'cal-f-desc', class: 'input', rows: 2, maxlength: LIMITS.description, dir: 'auto' }, v.description || ''), { id: 'cal-f-desc' }),
       event ? null : F(t('calendar.visibility'), select('cal-f-aud', [{ value: 'household', label: t('calendar.household') }, { value: 'private', label: `🔒 ${t('calendar.private')}` }], v.audience), { id: 'cal-f-aud' })].filter(Boolean),
@@ -137,7 +156,9 @@ export function eventForm({ store, container, event = null, preset = {} }) {
       const sh = val(r, '#cal-f-shift');
       const input = { title: val(r, '#cal-f-title'), type: val(r, '#cal-f-type'), shift: sh === 'none' ? null : sh, allDay, startDate: val(r, '#cal-f-sd'), endDate: val(r, '#cal-f-ed') || val(r, '#cal-f-sd'),
         startTime: allDay ? null : val(r, '#cal-f-st'), endTime: allDay ? null : val(r, '#cal-f-et'), location: val(r, '#cal-f-loc'), description: val(r, '#cal-f-desc'),
-        audience: event ? event.audience : val(r, '#cal-f-aud') };
+        audience: event ? event.audience : val(r, '#cal-f-aud'), reminderMinutes: val(r, '#cal-f-rem') === '' ? null : Number(val(r, '#cal-f-rem')) };
+      if (activity && !event) { input.kind = 'contactActivity'; input.contactId = v.contactId; input.status = 'planned'; }
+      if (activity && event) input.status = val(r, '#cal-f-status');
       if (event) await store.edit(event.id, input); else await store.create(input);   // validation errors are shown in the dialog
       return event ? 'calendar.toast.saved' : 'calendar.toast.created';
     } });

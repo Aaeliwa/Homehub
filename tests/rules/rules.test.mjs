@@ -2927,3 +2927,47 @@ test('V641A-1 AI JSON import (source "json"): contacts.import required; validate
   for (const u of [VIEWER_A, CHILD_A, MALLORY]) await assertDenied(setDoc(cnPath(db(u), `vc_json_${u.uid}`.slice(0, 40)), cnDoc(u, { source: 'json' })), `${u.uid} JSON import`);
   await assertDenied(cnUp(MEMBER_WIFE, 'vc_json000000001', { source: 'manual', rev: 2 }), 'source is immutable after create');
 });
+
+test('V641B-1 calendar contact activities / reminders: optional fields validated; older shapes still valid; private activity = creator only; CSV / revive untouched', async () => {
+  await savingsHome();
+  const W = MEMBER_WIFE; const up = (u, id, data) => updateDoc(calPath(db(u), id), { ...data, updatedBy: u.uid, updatedAt: serverTimestamp() });
+  const act = (u, x = {}) => calDoc(u, { title: 'Call the plumber', type: 'other', kind: 'contactActivity', contactId: 'plumber01', status: 'planned', reminderMinutes: 15, ...x });
+  await assertSucceeds(setDoc(calPath(db(W), 'evLegacyB'), calDoc(W)), 'an event WITHOUT the Stage B fields (older clients) is still valid');
+  await assertSucceeds(setDoc(calPath(db(W), 'evRemB01'), calDoc(W, { reminderMinutes: 60 })), 'ordinary event with a reminder');
+  await assertSucceeds(setDoc(calPath(db(W), 'evActB01'), act(W)), 'contact activity');
+  await assertSucceeds(setDoc(calPath(db(W), 'evActB02'), act(W, { audience: 'private', reminderMinutes: null })), 'private activity');
+  for (const [x, why] of [[{ reminderMinutes: 30 }, 'offset not in the list'], [{ reminderMinutes: '15' }, 'offset type'], [{ kind: 'meeting' }, 'unknown kind'],
+    [{ contactId: null }, 'activity without a contact'], [{ contactId: '../x' }, 'contact id format'], [{ status: 'lost' }, 'unknown status'], [{ status: null }, 'activity without a status'],
+    [{ kind: null }, 'contact link on an ordinary event'], [{ extra: 1 }, 'still no unknown keys']])
+    await assertDenied(setDoc(calPath(db(W), 'evActBX1'), act(W, x)), why);
+  await assertDenied(setDoc(calPath(db(W), 'evActBX2'), calDoc(W, { status: 'done' })), 'status only on activities');
+  await assertSucceeds(up(W, 'evActB01', { status: 'done', rev: 2 }), 'mark done');
+  await assertSucceeds(up(W, 'evActB01', { status: 'cancelled', reminderMinutes: 1440, rev: 3 }), 'cancel + reminder change');
+  await assertDenied(up(W, 'evActB01', { status: 'archived', rev: 4 }), 'bad status on update');
+  await assertDenied(up(W, 'evActB01', { contactId: null, rev: 4 }), 'cannot leave an activity without a contact');
+  await assertSucceeds(up(W, 'evLegacyB', { reminderMinutes: 0, rev: 2 }), 'older event gains a reminder on edit');
+  await assertSucceeds(up(W, 'evLegacyB', { title: 'Day Shift — Plant A', rev: 3 }), 'older-client edit (no Stage B keys) still valid');
+  await assertDenied(getDoc(calPath(db(OWNER_A), 'evActB02')), 'private activity: even the owner cannot read it');
+  await assertDenied(up(OWNER_A, 'evActB02', { status: 'done', rev: 2 }), 'nor change it');
+  await assertDenied(setDoc(calPath(db(VIEWER_A), 'evActBV1'), act(VIEWER_A)), 'viewer cannot create activities');
+  await assertDenied(up(VIEWER_A, 'evActB01', { status: 'planned', rev: 4 }), 'viewer cannot change status');
+  await assertDenied(setDoc(calPath(db(OWNER_HOME_B), 'evActBB1', 'hA'), act(OWNER_HOME_B)), 'other Home denied');
+});
+
+test('V641B-2 reminder states for Calendar (e:) and commitments (m:): prefix ↔ kind binding; owner-only; prefs accept the older and the new shape', async () => {
+  await genHome();
+  const W = MEMBER_WIFE; const O = MEMBER_OTHER;
+  const st = (u, key, sourceKind, x = {}) => ({ ...stDoc(u, key), sourceKind, ...x });
+  await assertSucceeds(setDoc(rsPath(db(W), sid(W, 'e:ev1@2026-11-22')), st(W, 'e:ev1@2026-11-22', 'calendarEvent', { state: 'dismissed' })), 'calendar state');
+  await assertSucceeds(setDoc(rsPath(db(W), sid(W, 'm:rent@2026-12-01')), st(W, 'm:rent@2026-12-01', 'commitment', { state: 'snoozed', snoozeUntil: isoIn(2) })), 'commitment snooze');
+  await assertDenied(setDoc(rsPath(db(W), sid(W, 'e:ev2@2026-11-22')), st(W, 'e:ev2@2026-11-22', 'commitment')), 'e: is never a commitment');
+  await assertDenied(setDoc(rsPath(db(W), sid(W, 'm:x@2026-11-22')), st(W, 'm:x@2026-11-22', 'calendarEvent')), 'm: is never a calendar event');
+  await assertDenied(setDoc(rsPath(db(W), sid(W, 'c:y@2026-11-22')), st(W, 'c:y@2026-11-22', 'calendarEvent')), 'old prefixes keep their kinds');
+  await assertDenied(setDoc(rsPath(db(W), sid(W, 'z:y')), st(W, 'z:y', 'calendarEvent')), 'unknown prefix');
+  await assertDenied(getDoc(rsPath(db(O), sid(W, 'e:ev1@2026-11-22'))), 'another member cannot read it');
+  await assertDenied(setDoc(rsPath(db(O), sid(W, 'e:ev1@2026-11-22')), st(O, 'e:ev1@2026-11-22', 'calendarEvent')), 'nor take it over');
+  await assertSucceeds(setDoc(rpPath(db(W), W.uid), prefDoc()), 'older prefs shape (cached clients)');
+  await assertSucceeds(setDoc(rpPath(db(W), W.uid), prefDoc({ calendar: false, commitments: true })), 'new shape');
+  await assertDenied(setDoc(rpPath(db(W), W.uid), prefDoc({ calendar: 'no' })), 'toggle type');
+  await assertDenied(setDoc(rpPath(db(W), W.uid), prefDoc({ contacts: true })), 'no other keys');
+});

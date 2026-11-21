@@ -184,7 +184,7 @@ function start() {
       // Lightweight bell: the live count (and its listeners) runs ONLY where that data is already open —
       // Dashboard, Reminders, Cleaning, Maintenance. Elsewhere the bell is a plain link: no extra reads.
       const countHere = route.name === 'dashboard' || route.name === 'reminders'
-        || (route.name === 'module' && (route.params.moduleId === 'cleaning' || route.params.moduleId === 'maintenance'));
+        || (route.name === 'module' && ['cleaning', 'maintenance', 'calendar', 'expenses'].includes(route.params.moduleId));   // V6.4.1 B: + Calendar, Finance
       if (instance.bellEl && countHere) {
         import('./ui/reminders/bell.js').then((m) => { if (shell && shell.instance === instance) bellOff = m.mountBell(instance.bellEl, pageContext()); })
           .catch((err) => log.warn('Reminders bell unavailable', describeError(err)));

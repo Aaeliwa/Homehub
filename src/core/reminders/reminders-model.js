@@ -7,9 +7,11 @@
 import { buildBoard, mayAct } from '../../modules/cleaning/cleaning-model.js';
 import { planStatus, nextDue } from '../../modules/maintenance/maintenance-model.js';
 import { addDays } from '../../modules/expenses/calendar.js';
+import { calendarReminders, commitmentReminders } from '../upcoming/upcoming-model.js';
 
 export const LOOK_AHEAD = Object.freeze([1, 3, 7, 14]);
-export const PREF_DEFAULTS = Object.freeze({ lookAheadDays: 3, cleaning: true, maintenancePlans: true, maintenanceFaults: true, quietStart: null, quietEnd: null });
+// V6.4.1 Stage B: `calendar` / `commitments` toggles (absent on older preference documents → on).
+export const PREF_DEFAULTS = Object.freeze({ lookAheadDays: 3, cleaning: true, maintenancePlans: true, maintenanceFaults: true, calendar: true, commitments: true, quietStart: null, quietEnd: null });
 export const STATES = Object.freeze(['read', 'dismissed', 'snoozed']);
 const SEV = { critical: 0, high: 1, medium: 2, low: 3 };
 const ORDER = { overdue: 0, today: 1, openFault: 2, upcoming: 3 };
@@ -18,7 +20,7 @@ export function prefsOf(doc) {
   const p = { ...PREF_DEFAULTS };
   if (doc) {
     if (LOOK_AHEAD.includes(doc.lookAheadDays)) p.lookAheadDays = doc.lookAheadDays;
-    for (const k of ['cleaning', 'maintenancePlans', 'maintenanceFaults']) if (typeof doc[k] === 'boolean') p[k] = doc[k];
+    for (const k of ['cleaning', 'maintenancePlans', 'maintenanceFaults', 'calendar', 'commitments']) if (typeof doc[k] === 'boolean') p[k] = doc[k];
     for (const k of ['quietStart', 'quietEnd']) if (Number.isInteger(doc[k]) && doc[k] >= 0 && doc[k] <= 23) p[k] = doc[k];
   }
   return p;
@@ -37,7 +39,7 @@ const ymd = (d) => d.replace(/-/g, '');
  * Derive the reminders a user may act on / see. `cleaning` / `maintenance` are null when the user
  * lacks that module's view permission (then nothing — not even a count — comes from it).
  */
-export function deriveReminders({ cleaning, maintenance, today, tz, uid, can, isChild, isVisible = () => true, roomOf = (t) => t.roomId || null, deviceOf = () => null, prefs = PREF_DEFAULTS }) {
+export function deriveReminders({ cleaning, maintenance, events = null, commitments = null, nowMin = 0, today, tz, uid, can, isChild, isVisible = () => true, roomOf = (t) => t.roomId || null, deviceOf = () => null, prefs = PREF_DEFAULTS }) {
   const out = []; const seen = new Set();
   const horizon = addDays(today, prefs.lookAheadDays);
   const push = (r) => { if (!seen.has(r.key)) { seen.add(r.key); out.push(r); } };
@@ -75,8 +77,12 @@ export function deriveReminders({ cleaning, maintenance, today, tz, uid, can, is
         title: f.summary, severity: f.severity, faultStatus: f.status, deviceId: f.deviceId, roomId: null, target: { module: 'maintenance', faultId: f.id } });
     }
   }
+  // V6.4.1 Stage B: Calendar (only events with a reminder, once it is due) and Finance commitments.
+  // `events` / `commitments` are null when the user cannot view that module — then nothing, not even a count.
+  if (events && prefs.calendar !== false) for (const r of calendarReminders(events, { today, nowMin })) push(r);
+  if (commitments && prefs.commitments !== false) for (const r of commitmentReminders(commitments, { today, lookAheadDays: prefs.lookAheadDays })) push(r);
   return out.sort((a, b) => ORDER[a.bucket] - ORDER[b.bucket]
-    || (a.bucket === 'openFault' ? (SEV[a.severity] ?? 9) - (SEV[b.severity] ?? 9) : String(a.date).localeCompare(String(b.date)))
+    || (a.bucket === 'openFault' ? (SEV[a.severity] ?? 9) - (SEV[b.severity] ?? 9) : String(a.date).localeCompare(String(b.date)) || String(a.time || '').localeCompare(String(b.time || '')))
     || String(a.title).localeCompare(String(b.title)));
 }
 

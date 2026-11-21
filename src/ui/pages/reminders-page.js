@@ -1,5 +1,6 @@
 /**
- * Reminders (#/reminders) — Phase 5.6. In-app only: derived from Cleaning + Maintenance (each shown
+ * Reminders (#/reminders) — Phase 5.6 / V6.4.1 Stage B. In-app only: derived from Cleaning, Maintenance, Calendar
+ * (events with a reminder, once due) and Finance commitments (each shown
  * only with its own view permission). Read / dismiss / snooze are per-user PRESENTATION state and
  * never change a task, plan, fault or cost. Background notifications are not implemented.
  */
@@ -12,10 +13,13 @@ import { createRemindersFeed, canSeeReminders } from '../../core/reminders/remin
 import { isShown, LOOK_AHEAD } from '../../core/reminders/reminders-model.js';
 import { setCleaningFocus } from '../../modules/cleaning/cleaning-service.js';
 import { setMaintenanceFocus } from '../../modules/maintenance/maintenance-service.js';
+import { setCalendarFocus } from '../../modules/calendar/calendar-focus.js';
+import { setFinanceFocus } from '../../modules/expenses/finance-focus.js';
 
-const FILTERS = ['all', 'cleaning', 'maintenance', 'overdue', 'upcoming', 'faults'];
+const FILTERS = ['all', 'cleaning', 'maintenance', 'calendar', 'bills', 'overdue', 'upcoming', 'faults'];   // V6.4.1 B: + Calendar, Bills
 const GROUPS = ['overdue', 'today', 'openFault', 'upcoming'];
-const match = (f, r) => f === 'all' || (f === 'cleaning' && r.sourceKind === 'cleaning') || (f === 'maintenance' && r.sourceKind !== 'cleaning')
+const match = (f, r) => f === 'all' || (f === 'cleaning' && r.sourceKind === 'cleaning') || (f === 'maintenance' && (r.sourceKind === 'maintenancePlan' || r.sourceKind === 'maintenanceFault'))
+  || (f === 'calendar' && r.sourceKind === 'calendarEvent') || (f === 'bills' && r.sourceKind === 'commitment')
   || (f === 'overdue' && r.bucket === 'overdue') || (f === 'upcoming' && (r.bucket === 'upcoming' || r.bucket === 'today')) || (f === 'faults' && r.bucket === 'openFault');
 
 export function mountReminders(outlet, ctx) {
@@ -35,10 +39,12 @@ export function mountReminders(outlet, ctx) {
   async function open(r) {
     try { if (r.presentation === 'unread') await feed.store.mark(r.key, 'read'); } catch { /* opening still works; state is optional */ }
     if (r.target.module === 'cleaning') { setCleaningFocus({ homeId: state.home.id, view: r.target.view, highlightTaskId: r.target.taskId }); ctx.navigate('/m/cleaning'); }
+    else if (r.target.module === 'calendar') { setCalendarFocus({ homeId: state.home.id, date: r.target.date, eventId: r.target.eventId }); ctx.navigate('/m/calendar'); }
+    else if (r.target.module === 'expenses') { setFinanceFocus({ homeId: state.home.id, tab: 'commitments', commitmentId: r.target.commitmentId }); ctx.navigate('/m/expenses'); }
     else { setMaintenanceFocus({ homeId: state.home.id, planId: r.target.planId || null, faultId: r.target.faultId || null }); ctx.navigate('/m/maintenance'); }
   }
-  const typeLabel = (r) => t(`reminders.kind.${r.sourceKind}`);
-  const when = (r) => (r.bucket === 'openFault' ? t('reminders.noDueDate') : r.bucket === 'today' ? t('reminders.dueToday') : r.bucket === 'overdue' ? t('reminders.overdueSince', { date: formatDateLong(r.date, locale) }) : formatDateLong(r.date, locale));
+  const typeLabel = (r) => t(r.kind === 'contactActivity' ? 'reminders.kind.contactActivity' : `reminders.kind.${r.sourceKind}`);
+  const when = (r) => (r.bucket === 'openFault' ? t('reminders.noDueDate') : r.bucket === 'today' ? [t('reminders.dueToday'), r.time].filter(Boolean).join(' · ') : r.bucket === 'overdue' ? t('reminders.overdueSince', { date: formatDateLong(r.date, locale) }) : [formatDateLong(r.date, locale), r.time].filter(Boolean).join(' · '));
   function item(r, hidden) {
     const where = [data.deviceName(r.deviceId), data.roomName(r.roomId)].filter(Boolean).join(' · ');
     const tag = r.bucket === 'openFault' ? t(`maintenance.severity.${r.severity}`) : r.priority === 'high' ? t('reminders.high') : null;
@@ -67,6 +73,8 @@ export function mountReminders(outlet, ctx) {
       data.sources.cleaning ? h('label', { class: 'fin-check' }, chk('rm-t-cleaning', p.cleaning), h('span', null, t('reminders.kind.cleaning'))) : null,
       data.sources.maintenance ? h('label', { class: 'fin-check' }, chk('rm-t-plans', p.maintenancePlans), h('span', null, t('reminders.kind.maintenancePlan'))) : null,
       data.sources.maintenance ? h('label', { class: 'fin-check' }, chk('rm-t-faults', p.maintenanceFaults), h('span', null, t('reminders.kind.maintenanceFault'))) : null,
+      data.sources.calendar ? h('label', { class: 'fin-check' }, chk('rm-t-calendar', p.calendar), h('span', null, t('reminders.kind.calendarEvent'))) : null,
+      data.sources.finance ? h('label', { class: 'fin-check' }, chk('rm-t-bills', p.commitments), h('span', null, t('reminders.kind.commitment'))) : null,
       h('div', { class: 'form-grid form-grid--tight' },
         h('label', { class: 'field' }, h('span', { class: 'field__label' }, t('reminders.quietFrom')), hourSel('rm-q-start', p.quietStart)),
         h('label', { class: 'field' }, h('span', { class: 'field__label' }, t('reminders.quietTo')), hourSel('rm-q-end', p.quietEnd))),
@@ -76,7 +84,8 @@ export function mountReminders(outlet, ctx) {
         const btn = e.currentTarget; btn.disabled = true;   // V6.3 fix: currentTarget is null after an await
         await act(() => feed.store.savePrefs({ lookAheadDays: Number(q('#rm-look').value),
           cleaning: q('#rm-t-cleaning') ? q('#rm-t-cleaning').checked : p.cleaning, maintenancePlans: q('#rm-t-plans') ? q('#rm-t-plans').checked : p.maintenancePlans,
-          maintenanceFaults: q('#rm-t-faults') ? q('#rm-t-faults').checked : p.maintenanceFaults, quietStart: num('#rm-q-start'), quietEnd: num('#rm-q-end') }), 'reminders.toast.saved');
+          maintenanceFaults: q('#rm-t-faults') ? q('#rm-t-faults').checked : p.maintenanceFaults,
+          calendar: q('#rm-t-calendar') ? q('#rm-t-calendar').checked : p.calendar, commitments: q('#rm-t-bills') ? q('#rm-t-bills').checked : p.commitments, quietStart: num('#rm-q-start'), quietEnd: num('#rm-q-end') }), 'reminders.toast.saved');
         btn.disabled = false;
       } }, t('common.save')));
   }
@@ -93,12 +102,16 @@ export function mountReminders(outlet, ctx) {
         h('button', { type: 'button', class: 'btn btn--ghost btn--sm', id: 'rm-settings-btn', 'aria-expanded': String(showSettings), onClick: () => { showSettings = !showSettings; render(); } }, t('reminders.settings'))),
       showSettings ? settings() : null,
       partial ? h('p', { class: 'field__hint', id: 'rm-partial' }, partial) : null,
-      h('div', { class: 'cl-chips', role: 'group', 'aria-label': t('reminders.filter') }, FILTERS.map((f) => h('button', { type: 'button', class: `btn btn--sm ${f === filter ? 'btn--primary' : 'btn--secondary'}`, id: `rm-f-${f}`, 'aria-pressed': String(f === filter), onClick: () => { filter = f; render(); } }, t(`reminders.filter.${f}`)))),
+      h('div', { class: 'cl-chips', role: 'group', 'aria-label': t('reminders.filter') }, FILTERS.filter((f) => filterAvailable(f)).map((f) => h('button', { type: 'button', class: `btn btn--sm ${f === filter ? 'btn--primary' : 'btn--secondary'}`, id: `rm-f-${f}`, 'aria-pressed': String(f === filter), onClick: () => { filter = f; render(); } }, t(`reminders.filter.${f}`)))),
       shown.length ? h('div', { id: 'rm-groups' }, ...GROUPS.map((g) => { const list = shown.filter((r) => r.bucket === g); return list.length ? h('section', { id: `rm-g-${g}` }, h('h2', { class: 'cl-setup__title' }, t(`reminders.group.${g}`)), h('ul', { class: 'cl-list' }, list.map((r) => item(r, false)))) : null; }).filter(Boolean))
         : h('p', { class: 'empty', id: 'rm-empty' }, t(data.items.length ? 'reminders.emptyFiltered' : 'reminders.empty')),
       hidden.length ? h('details', { class: 'form-section', id: 'rm-hidden' }, h('summary', { class: 'form-section__summary' }, t('reminders.hiddenTitle', { n: hidden.length })),
         h('ul', { class: 'cl-list' }, hidden.map((r) => item(r, true)))) : null,
     ].filter(Boolean));
+  }
+  function filterAvailable(f) {
+    const s = data.sources;
+    return f === 'cleaning' ? s.cleaning : f === 'maintenance' || f === 'faults' ? s.maintenance : f === 'calendar' ? s.calendar : f === 'bills' ? s.finance : true;
   }
   let feed;
   try { feed = createRemindersFeed(ctx, (d) => { data = d; render(); }); }

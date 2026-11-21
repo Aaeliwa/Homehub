@@ -439,3 +439,19 @@ The URL checks are **syntactic and best-effort**. HomeHub has no server, proxy o
 - **inspect content.** A link can change what it serves at any time.
 
 **What this means:** HomeHub does **not** claim complete protection against requests to private networks. Pictures, menu images and frames are requested without a referrer, and HomeHub adds no credentials (no `crossorigin`). The browser still sends that site's own cookies, as for any embedded image. The editor and Menu section tell people that the hosting site sees the request. Only household members with `contacts.edit` can add links.
+
+## V6.4.1 Stage B: Upcoming, contact activities, Calendar / Finance reminders
+
+| Who | Dashboard Upcoming / Reminders sources | Contact activities |
+|---|---|---|
+| Owner / Admin / Member | Calendar (household + own private), Bills (amounts with `expenses.viewFinancialTotals`), Cleaning, Maintenance | view, add, edit, mark done (`calendar.create` / `calendar.edit`) |
+| Viewer | Calendar, Bills (no amounts unless granted), Cleaning, Maintenance | view only |
+| Child | Calendar, Cleaning (their own tasks) — **no Bills** (no `expenses.view`) | view only |
+| Other Home / non-member | nothing | nothing |
+
+- **No new read path.** Every item is derived from the module stores of the CURRENT Home (scope-bound; disposed on Home switch / sign-out). Those stores use the same rule-compatible queries as before, so another member's private events and unreadable commitments never reach the device. The Upcoming panel and Reminders share ONE hub per Home: one subscription per store, one 60 s clock, released when the last consumer leaves.
+- **Dashboard visibility ≠ notification eligibility.** Upcoming ignores reminder preferences and read / dismissed / snoozed state. Reminders follow the user's preferences (two new toggles) and their own presentation state.
+- **Reminder state stays per user** (`reminderStates`, owner-only). New key prefixes `e:` (Calendar) and `m:` (commitment) are bound by the rules to `sourceKind` `calendarEvent` / `commitment`; an unknown prefix is refused (also locally).
+- **Calendar fields:** validated by the rules (`calLinkOk`): fixed kind / status / offset values, contact id format; no contact read per write (cost) — a link to a missing contact reveals nothing. Private activities: creator only, no admin override (unchanged Calendar rule).
+- **No push or OS notifications, no Cloud Functions, no new collection.** In-app only, while the app is open.
+- **Navigation intents** (Upcoming → Calendar / Bills / Contact) are in-memory, read-once and Home-scoped: never in the URL, ignored by another Home.

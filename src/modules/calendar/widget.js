@@ -8,6 +8,7 @@ import { t, getLocale } from '../../core/i18n/i18n.js';
 import { todayIn, formatMonth } from '../expenses/calendar.js';
 import { shiftMonth } from './calendar-model.js';
 import { getCalendarStore } from './calendar-service.js';
+import { setContactsFocus } from '../contacts/contacts-nav.js';
 import { grid, agenda, legend, eventForm } from './calendar-ui.js';
 
 export function mount(slot, ctx) {
@@ -30,7 +31,7 @@ export function mount(slot, ctx) {
     const body = snap.status === 'error' ? h('p', { class: 'field__error' }, t('calendar.err.load'))
       : grid({ ym, selected, today, events: snap.events, expanded, idPrefix: 'calw', onSelect: (d, kb) => { selected = d; ym = d.slice(0, 7); render(kb ? d : null); } });
     card.replaceChildren(...[head, body, legend(),
-      agenda({ store, date: selected, events: snap.events, can, uid: state.identity.uid, container: card, id: 'calw-agenda' }),
+      agenda({ openContact: (cid) => { setContactsFocus({ homeId: state.home.id, contactId: cid }); ctx.navigate('/m/contacts'); }, store, date: selected, events: snap.events, can, uid: state.identity.uid, container: card, id: 'calw-agenda' }),
       expanded ? h('a', { href: '#/m/calendar', class: 'btn btn--secondary btn--sm', id: 'calw-open' }, t('calendar.openFull')) : null].filter(Boolean));
     if (focusDate) { const c = card.querySelector(`[data-date="${focusDate}"]`); if (c) c.focus(); }
   }

@@ -154,3 +154,11 @@ html[data-wa-icon='ok'] .ct-wa-ico__fallback { display: none; }
 .ct-json-pick { display: grid; gap: 0.25rem; max-block-size: 16rem; overflow: auto; border: 1px solid var(--border); border-radius: var(--radius-md); padding: 0.5rem 0.75rem; margin: 0; }
 .ct-take { display: grid; gap: 0.3rem; border: 1px dashed var(--border); border-radius: var(--radius-md); padding: 0.5rem 0.75rem; margin: 0; }
 .ct-take label { overflow-wrap: anywhere; }
+
+/* ---------- V6.4.1 Stage B: contact activities (list panel + details section; rows from components.css) */
+.ct-upcoming { padding-block: 1rem; }
+.ct-upcoming__title { font-size: 1rem; margin-block-end: 0.5rem; }
+.ct-acts { margin-block-start: 1rem; }
+.ct-acts .card__head { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; margin-block-end: 0.5rem; }
+.ct-acts .up-item { flex-wrap: wrap; }
+.cal-form__with { font-weight: 600; margin: 0 0 0.5rem; }

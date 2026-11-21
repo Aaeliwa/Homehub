@@ -118,7 +118,7 @@ function checkQuery(q) {
     const role = m && state.db[`homes/${home}/roles/${m.roleId}`];
     const perms = (role && role.permissions) || [];
     // Phase 5: savings collections are gated by savings.view; finance ones by expenses.view.
-    const ns = /\/(savingsAssets|savingsEvents)$/.test(q.path) ? 'savings' : 'expenses';
+    const ns = /\/(savingsAssets|savingsEvents)$/.test(q.path) ? 'savings' : /\/(calendarEvents|calendarImports)$/.test(q.path) ? 'calendar' : 'expenses';   // V6.4.1 B: calendar.view, as the rules
     if (!(perms.includes('*') || perms.includes(`${ns}.*`) || perms.includes(`${ns}.view`))) throw err('permission-denied');
   }
 }
@@ -129,6 +129,8 @@ export function onSnapshot(ref, next, onError) {
   const isCol = ref.type === 'collection' || ref.type === 'query';
   const fire = () => {
     try {
+      // V6.4.1 B test control: simulate a backend failure for listeners on matching paths (error states)
+      if (state.failOn && new RegExp(state.failOn).test(ref.path)) throw err('unavailable');
       checkRead(isCol ? ref.path + '/x' : ref.path);
       if (ref.type === 'query') checkQuery(ref);
       else if (ref.type === 'collection') checkCollection(ref.path);

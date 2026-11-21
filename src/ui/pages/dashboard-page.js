@@ -9,6 +9,7 @@ import { h } from '../../core/utils/dom.js';
 import { t, formatLongDate, hourIn, formatNumber, getLocale } from '../../core/i18n/i18n.js';
 import { roleLabel } from '../components/common.js';
 import { log } from '../../core/utils/logger.js';
+import { canSeeReminders } from '../../core/upcoming/access.js';
 
 function greetingKey(hour) {
   if (hour < 5) return 'dashboard.greeting.evening';
@@ -60,6 +61,7 @@ export function mountDashboard(outlet, ctx) {
   const tools = ctx.registry.visibleFor(permissions);
   const widgets = ctx.registry.widgetsFor(permissions);
   const widgetGrid = h('div', { class: 'widget-grid' });
+  const upcomingSlot = canSeeReminders(permissions) ? h('div', { class: 'up-slot', id: 'up-slot' }) : null;
 
   const page = h('div', { class: 'page page--dashboard' },
     h('section', { class: 'hero', 'aria-labelledby': 'hero-home' },
@@ -71,6 +73,9 @@ export function mountDashboard(outlet, ctx) {
 
     // Module summaries sit right under the hero (Phase 2: first widget = Rooms).
     widgets.length ? h('section', { class: 'summaries', 'aria-label': t('dashboard.summaries') }, widgetGrid) : null,
+
+    // V6.4.1 Stage B: unified Upcoming (Calendar · Contacts · Bills · Cleaning · Maintenance). Not the old Reminders card.
+    upcomingSlot,
 
     h('div', { class: 'dash-grid' },
       h('section', { class: 'card card--facts', 'aria-labelledby': 'facts-title' },
@@ -86,7 +91,7 @@ export function mountDashboard(outlet, ctx) {
         tools.length
           ? h('div', { class: 'tile-grid' }, tools.map(moduleTile),
             // V6.4: Reminders keeps a Tools entry now that its dashboard tile is gone (same audience as the bell).
-            permissions.can('cleaning.view') || permissions.can('maintenance.view')
+            canSeeReminders(permissions)
               ? h('a', { href: '#/reminders', class: 'tile accent-amber', id: 'tool-reminders' },
                 h('span', { class: 'tile__icon', 'aria-hidden': 'true' }, '🔔'),
                 h('span', { class: 'tile__text' }, h('span', { class: 'tile__name' }, t('reminders.title')), h('span', { class: 'tile__desc' }, t('reminders.sub'))))
@@ -112,6 +117,11 @@ export function mountDashboard(outlet, ctx) {
     m.dashboardWidget.load()
       .then((mod) => { if (alive) { const off = mod.mount(slot, ctx); if (typeof off === 'function') unmounts.push(off); } })
       .catch((err) => { log.error(`Widget ${m.id} failed`, err); slot.remove(); });
+  }
+  if (upcomingSlot) {
+    import('../upcoming/upcoming-panel.js')
+      .then((mod) => { if (alive) { const off = mod.mountUpcomingPanel(upcomingSlot, ctx); if (typeof off === 'function') unmounts.push(off); } })
+      .catch((err) => { log.error('Upcoming panel failed', err); upcomingSlot.replaceChildren(h('p', { class: 'field__error', id: 'up-error' }, t('upcoming.error'))); });
   }
   // V6.4: the Reminders dashboard tile was removed. Reminders stay available via the bell (with its
   // badge), the Reminders page and the Tools entry; notifications are unchanged.

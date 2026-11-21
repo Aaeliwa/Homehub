@@ -4,7 +4,7 @@
  * Delete = soft delete (deletedAt): a vacation used by a Finance filter simply stops matching; the
  * ledger is never rewritten. CSV import = create-only deterministic ids → re-import never duplicates.
  */
-import { validateEvent, createDoc, editPatch, isLive, intervals, batchDoc, removalPlan, reviveDoc, ungroupedImports, batchMembers, REMOVE_CHUNK } from './calendar-model.js';
+import { validateEvent, createDoc, editPatch, isLive, intervals, batchDoc, removalPlan, reviveDoc, ungroupedImports, batchMembers, REMOVE_CHUNK, isActivity, statusOf, STATUSES } from './calendar-model.js';
 
 const IMPORTS = 'calendarImports';
 const ms = (x) => (x && typeof x.toMillis === 'function' ? x.toMillis() : typeof x === 'string' ? Date.parse(x) || 0 : 0);
@@ -52,13 +52,22 @@ export function createCalendarStore({ homeId, uid, timezone, repo }) {
       return id;
     },
     async edit(id, input) {
-      guard(); const cur = live(id); const { value, errors } = validateEvent({ ...input, audience: cur.audience }); check(errors);
+      // Stage B: the activity link (kind / contact) is fixed at creation; status / reminder keep their value unless given.
+      guard(); const cur = live(id);
+      const { value, errors } = validateEvent({ status: cur.status, reminderMinutes: cur.reminderMinutes ?? null, ...input, kind: cur.kind ?? null, contactId: cur.contactId ?? null, audience: cur.audience }); check(errors);
       const p = editPatch(cur, value, { uid, now: repo.now() }); if (!p) return;
       try { await repo.commit(homeId, [{ mode: 'update', id, data: p }]); } catch (e) { if (denied(e)) throw fail('calendar.err.conflict'); throw e; }
     },
     async setDone(id, done) {
       guard(); const cur = live(id); if (cur.type !== 'task') throw fail('calendar.err.notTask');
       await repo.commit(homeId, [{ mode: 'update', id, data: { done: !!done, rev: cur.rev + 1, updatedBy: uid, updatedAt: repo.now() } }]);
+    },
+    /** Stage B: planned / done / cancelled — contact activities only. */
+    async setStatus(id, status) {
+      guard(); const cur = live(id); if (!isActivity(cur)) throw fail('calendar.err.notActivity');
+      if (!STATUSES.includes(status)) throw fail('calendar.err.status');
+      if (statusOf(cur) === status) return;
+      try { await repo.commit(homeId, [{ mode: 'update', id, data: { status, rev: cur.rev + 1, updatedBy: uid, updatedAt: repo.now() } }]); } catch (e) { if (denied(e)) throw fail('calendar.err.conflict'); throw e; }
     },
     async remove(id) {
       guard(); const cur = live(id); const now = repo.now();

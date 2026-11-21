@@ -16,6 +16,7 @@ import { categoryIcon } from './finance-model.js';
 import { money, catLabel, stat } from './finance-ui.js';
 import { quickAdd } from './expense-form.js';
 import { renderCommitmentsTab } from './tab-commitments.js';
+import { takeFinanceFocus } from './finance-focus.js';
 import { renderWalletsTab } from './tab-wallets.js';
 import { renderMonthlyTab, renderHistoryTab } from './tab-monthly.js';   // V6.2 daily Finance; V6.2.1 shared History table
 import { getCalendarStore } from '../calendar/calendar-service.js';
@@ -34,6 +35,7 @@ export function mount(outlet, ctx) {
   const today = todayIn(home.timezone);
   const locale = getLocale();
   let tab = 'overview';
+  { const f = takeFinanceFocus(home.id); if (f && f.tab === 'commitments') tab = 'commitments'; }   // V6.4.1 Stage B: Upcoming / Reminders → Bills
   let calStore = null; try { calStore = getCalendarStore(ctx, { optional: true }); } catch { calStore = null; }
   // V6.2: page-session state of the daily view (selected month survives re-renders and tab switches).
   const ui = { ym: null, q: '', cal: 'all', cat: 'all', wallet: 'all', limit: 50, picker: false, budgetOpen: false };

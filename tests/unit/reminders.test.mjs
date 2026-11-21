@@ -106,7 +106,7 @@ test('store: owner-scoped writes (presentation only), prefs validated, listeners
   assert.ok(ops.every((o) => ['reminderStates', 'reminderPrefs'].includes(o.name)), 'never writes Cleaning / Maintenance');
   await assert.rejects(s.savePrefs({ ...PREF_DEFAULTS, lookAheadDays: 5 }), (e) => e.detail === 'reminders.err.prefs');
   await s.savePrefs({ ...PREF_DEFAULTS, quietStart: 22, quietEnd: 6 });
-  assert.deepEqual(ops.at(-1).data, { lookAheadDays: 3, cleaning: true, maintenancePlans: true, maintenanceFaults: true, quietStart: 22, quietEnd: 6, updatedAt: 'N', schemaVersion: 1 });
+  assert.deepEqual(ops.at(-1).data, { lookAheadDays: 3, cleaning: true, maintenancePlans: true, maintenanceFaults: true, calendar: true, commitments: true, quietStart: 22, quietEnd: 6, updatedAt: 'N', schemaVersion: 1 });
   assert.equal(ops.at(-1).id, 'u1');
   assert.equal(w, 2); s.dispose(); assert.equal(w, 0);
 });

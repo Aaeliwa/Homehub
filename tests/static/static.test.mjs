@@ -246,9 +246,9 @@ test('Phase 5.6: only the reminders repository deletes (owner-only presentation 
     join('src', 'modules', 'contacts', 'contacts-repository.js'), join('src', 'modules', 'contacts', 'contacts-store.js')].sort());
 });
 
-test('Phase 5.6: the reminders bell count (and its listeners) runs only on Dashboard / Reminders / Cleaning / Maintenance', () => {
+test('Phase 5.6 / V6.4.1 B: the reminders bell count (and its listeners) runs only where its data is already open — Dashboard / Reminders / Cleaning / Maintenance / Calendar / Finance', () => {
   const m = read(join('src', 'main.js'));
-  assert.match(m, /const countHere = route\.name === 'dashboard' \|\| route\.name === 'reminders'\s*\|\| \(route\.name === 'module' && \(route\.params\.moduleId === 'cleaning' \|\| route\.params\.moduleId === 'maintenance'\)\);/);
+  assert.match(m, /const countHere = route\.name === 'dashboard' \|\| route\.name === 'reminders'\s*\|\| \(route\.name === 'module' && \['cleaning', 'maintenance', 'calendar', 'expenses'\]\.includes\(route\.params\.moduleId\)\);/);
   assert.match(m, /if \(instance\.bellEl && countHere\)/);
 });
 

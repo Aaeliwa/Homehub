@@ -14,6 +14,8 @@ import { formDialog } from '../expenses/dialogs.js';
 import { todayIn, formatMonth, formatDateShort, formatDateLong, addDays } from '../expenses/calendar.js';
 import { shiftMonth, weekOf, eventsOn, inRange, offDutyGaps, previewImport, TYPES, isLive, batchMembers, shiftOf } from './calendar-model.js';
 import { getCalendarStore } from './calendar-service.js';
+import { setContactsFocus } from '../contacts/contacts-nav.js';
+import { takeCalendarFocus } from './calendar-focus.js';
 import { icon } from '../../ui/components/icons.js';
 import { grid, agenda, legend, eventForm, timeText, colorOf, shiftIcon, titleWithIcon, msg, weekdayLabels } from './calendar-ui.js';
 
@@ -22,6 +24,9 @@ export function mount(outlet, ctx) {
   let store; try { store = getCalendarStore(ctx); } catch (e) { outlet.replaceChildren(h('div', { class: 'page' }, banner('error', errorText(e)))); return () => {}; }
   const today = todayIn(state.home.timezone);
   let view = 'month'; let ym = today.slice(0, 7); let selected = today; let importState = null;
+  // V6.4.1 Stage B: opened from Upcoming / Reminders → show that date (read-once, same Home only)
+  const focus = takeCalendarFocus(state.home.id);
+  if (focus && focus.date && /^\d{4}-\d{2}-\d{2}$/.test(focus.date)) { selected = focus.date; ym = focus.date.slice(0, 7); }
   const root = h('div', { class: 'page accent-blue', id: 'cal-page' }); const body = h('div', { class: 'cal-body', id: 'cal-body' });
   root.append(body); outlet.replaceChildren(root);
 
@@ -184,7 +189,7 @@ export function mount(outlet, ctx) {
     if (view === 'settings') { body.replaceChildren(...[...toolbar(), settingsView(snap)].filter(Boolean)); return; }
     const main = view === 'month'
       ? h('section', { class: 'card fin-card' }, grid({ ym, selected, today, events: snap.events, expanded: true, idPrefix: 'cal', onSelect: (d, kb) => { selected = d; ym = d.slice(0, 7); render(); if (kb) { const c = body.querySelector(`#cal-grid [data-date="${d}"]`); if (c) c.focus(); } } }), legend(),
-        agenda({ store, date: selected, events: snap.events, can, uid, container: root }))
+        agenda({ openContact: (cid) => { setContactsFocus({ homeId: state.home.id, contactId: cid }); ctx.navigate('/m/contacts'); }, store, date: selected, events: snap.events, can, uid, container: root }))
       : h('section', { class: 'card fin-card' }, view === 'week' ? weekView(snap.events) : agendaView(snap.events));
     body.replaceChildren(...[...toolbar(), importState ? importView() : null, main, workPanel(snap.events)].filter(Boolean));
   }
