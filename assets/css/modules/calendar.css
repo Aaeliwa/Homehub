@@ -61,3 +61,46 @@
 .cal-gear { flex: 0 0 auto; inline-size: 44px; block-size: 44px; }
 .cal-gear[aria-pressed='true'] { background: var(--info-soft); color: var(--link); border-color: color-mix(in srgb, var(--link) 40%, var(--border)); }
 .cal-gear:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; }
+
+
+/* HomeHub Calendar agenda mobile layout fix */
+.cal-item > .fin-row__main {
+  min-inline-size: 0;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 600px) {
+  .cal-item {
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: start;
+    gap: 0.5rem 0.65rem;
+  }
+
+  .cal-item > .cal-dot {
+    grid-column: 1;
+    grid-row: 1;
+    margin-block-start: 0.45rem;
+  }
+
+  .cal-item > .fin-row__main {
+    grid-column: 2;
+    grid-row: 1;
+    inline-size: 100%;
+    overflow-wrap: anywhere;
+  }
+
+  .cal-item > .cl-item__actions {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    inline-size: 100%;
+    min-inline-size: 0;
+  }
+
+  .cal-item > .cl-item__actions .btn {
+    flex: 0 1 auto;
+    min-inline-size: 44px;
+  }
+}
