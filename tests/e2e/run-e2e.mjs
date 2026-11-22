@@ -317,7 +317,10 @@ await check('R6 refresh: rooms persist in order', async () => {
 
 await check('R7 detail shows honest future placeholders; edit Bedroom (field-level patch)', async () => {
   await page.click('.room-card__main:has-text("Bedroom")');
-  await page.locator('dialog[open] .room-future').waitFor();
+  // Wait for the asynchronous device summary to finish loading.
+  await page.locator('dialog[open] .room-future', {
+    hasText: 'No devices in this room yet'
+  }).waitFor();
   const future = await page.locator('dialog[open] .room-future').innerText();
   // Phase 3: the Devices row is live (via the Devices module interface); Cleaning and
   // Maintenance remain honest "coming later" placeholders.
