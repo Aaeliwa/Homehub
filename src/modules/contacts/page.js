@@ -674,7 +674,15 @@ export function mount(outlet, ctx) {
     const focusSearch = document.activeElement && document.activeElement.id === 'ct-search';
     paint(body, header(), listView(snap));
     if (focusSearch) { const s = document.getElementById('ct-search'); s.focus(); s.setSelectionRange(s.value.length, s.value.length); }
-    if (pendingScroll !== null) { const y = pendingScroll; pendingScroll = null; requestAnimationFrame(() => window.scrollTo(0, y)); }
+    if (pendingScroll !== null) {
+      const y = pendingScroll;
+      pendingScroll = null;
+      console.log('CT_SCROLL_RESTORE', { savedY: y, beforeY: window.scrollY, maxY: document.documentElement.scrollHeight - window.innerHeight });
+      requestAnimationFrame(() => {
+        window.scrollTo(0, y);
+        console.log('CT_SCROLL_APPLIED', { targetY: y, actualY: window.scrollY });
+      });
+    }
   }
   const off = store.subscribe(() => { if (imp && imp.busy) return; render(); });
   // Stage B: activity changes redraw only the list (panel) and details — never an import / JSON / form in progress

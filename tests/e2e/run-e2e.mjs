@@ -4338,6 +4338,20 @@ async function seed641(p, H, { monaRole = 'viewer', lang = 'en' } = {}) {
 }
 const menuIds = (p, btn) => p.locator(`.ct-more:has(#${btn}) [role=menuitem]`).evaluateAll((els) => els.map((e) => e.id));
 
+console.log('CT_SCROLL_DIAGNOSTICS_ENABLED');
+page.on('console', (msg) => {
+  if (msg.text().startsWith('CT_SCROLL_')) {
+    console.log('BROWSER:', msg.text());
+  }
+});
+
+console.log('CT_SCROLL_DIAGNOSTICS_ENABLED');
+page.on('console', (msg) => {
+  if (msg.text().startsWith('CT_SCROLL_')) {
+    console.log('BROWSER:', msg.text());
+  }
+});
+
 await check('V641-A Contacts UI: management actions ONLY in the ⋮ menus (list / details, permission-gated, keyboard + outside close) · full-width New above the list · Category + Favourites side by side 320–412 EN/AR light/dark · tile Call / WhatsApp never open details (chooser for several numbers) · Back to Contacts / browser Back exactly one step with filters + scroll kept (also through the menu viewer, rapid navigation, delete) · no dialer note · upcoming panel hidden', async () => {
   await ensureSignedOut();
   const H = 'hV641A'; const err0 = page.errors.length; const log = [];
