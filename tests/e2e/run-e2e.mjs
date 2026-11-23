@@ -4338,20 +4338,6 @@ async function seed641(p, H, { monaRole = 'viewer', lang = 'en' } = {}) {
 }
 const menuIds = (p, btn) => p.locator(`.ct-more:has(#${btn}) [role=menuitem]`).evaluateAll((els) => els.map((e) => e.id));
 
-console.log('CT_SCROLL_DIAGNOSTICS_ENABLED');
-page.on('console', (msg) => {
-  if (msg.text().startsWith('CT_SCROLL_')) {
-    console.log('BROWSER:', msg.text());
-  }
-});
-
-console.log('CT_SCROLL_DIAGNOSTICS_ENABLED');
-page.on('console', (msg) => {
-  if (msg.text().startsWith('CT_SCROLL_')) {
-    console.log('BROWSER:', msg.text());
-  }
-});
-
 await check('V641-A Contacts UI: management actions ONLY in the ⋮ menus (list / details, permission-gated, keyboard + outside close) · full-width New above the list · Category + Favourites side by side 320–412 EN/AR light/dark · tile Call / WhatsApp never open details (chooser for several numbers) · Back to Contacts / browser Back exactly one step with filters + scroll kept (also through the menu viewer, rapid navigation, delete) · no dialer note · upcoming panel hidden', async () => {
   await ensureSignedOut();
   const H = 'hV641A'; const err0 = page.errors.length; const log = [];
@@ -4467,6 +4453,12 @@ await check('V641-A Contacts UI: management actions ONLY in the ⋮ menus (list 
   assert.equal(await page.evaluate(() => history.length), Ld, 'editing adds no entry');
   assert.equal(await page.evaluate(() => !!(history.state && history.state.ctNav && history.state.ctNav.v === 'detail')), true, 'editing keeps the same details entry');
   await ctAct(page, '#ct-delete'); await page.click('dialog[open] .btn--danger'); shown -= 1;
+  console.log('CT_DELETE_SCROLL', JSON.stringify(await page.evaluate(() => ({
+    scrollY: window.scrollY,
+    maxY: document.documentElement.scrollHeight - innerHeight,
+    saved: history.state?.ctList,
+    cards: document.querySelectorAll('#ct-list .ct-card').length
+  }))));
   await restored('delete → one step back (list without the deleted contact)');
   // menu viewer inside details: Back closes the viewer first, then the details — still Contacts
   await page.goto(BASE + '#/'); await page.locator('.hero__home').waitFor();
