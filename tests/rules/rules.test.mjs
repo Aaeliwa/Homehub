@@ -3003,7 +3003,7 @@ test('V65P01-2 pantry create: inventory.create (owner / admin / member); viewer 
   await assertDenied(setDoc(pnPath(db(OWNER_HOME_B), 'pnCross1'), pnDoc(OWNER_HOME_B)), 'other Home owner into hA');
   const bad = [
     [{ stockMilli: 5000 }, 'non-zero initial stock'], [{ stockRev: 1 }, 'stockRev must start at 0'], [{ presence: 'in' }, 'presence must start unrecorded'],
-    [{ rev: 2 }, 'rev must be 1'], [{ archived: true }, 'cannot create archived'], [{ createdBy: 'ownerA' }, 'createdBy spoof'], [{ updatedBy: 'ownerA' }, 'updatedBy spoof'],
+    [{ rev: 2 }, 'rev must be 1'], [{ archived: true }, 'cannot create archived'], [{ createdBy: 'adminA' }, 'createdBy spoof'], [{ updatedBy: 'adminA' }, 'updatedBy spoof'],
     [{ createdAt: new Date('2020-01-01') }, 'client timestamp'], [{ schemaVersion: 2 }, 'schema version'], [{ price: 10 }, 'unknown key (price)'], [{ expenseId: 'e1' }, 'unknown key'],
     [{ nameEn: null, nameAr: null }, 'no name'], [{ nameEn: 'x'.repeat(81) }, 'name too long'], [{ nameEn: '   ' }, 'blank name'], [{ category: 'weapons' }, 'category enum'],
     [{ location: 'roof' }, 'location enum'], [{ dimension: 'mass', displayUnit: 'piece' }, 'unit / dimension mismatch'], [{ displayUnit: 'cup' }, 'unknown unit'],
