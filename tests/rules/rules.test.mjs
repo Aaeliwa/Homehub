@@ -2971,3 +2971,95 @@ test('V641B-2 reminder states for Calendar (e:) and commitments (m:): prefix ↔
   await assertDenied(setDoc(rpPath(db(W), W.uid), prefDoc({ calendar: 'no' })), 'toggle type');
   await assertDenied(setDoc(rpPath(db(W), W.uid), prefDoc({ contacts: true })), 'no other keys');
 });
+
+// =================================================================== V6.5 PHASE 01 — Pantry product catalog
+import { createDoc as pnCreateDoc, validateProduct as pnValidate, archivePatch as pnArchive, restorePatch as pnRestore } from '../../src/modules/inventory/product-model.js';
+const pnPath = (f, id, h = 'hA') => doc(f, 'homes', h, 'pantryProducts', id);
+const pnDoc = (u, input = {}, x = {}) => ({ ...pnCreateDoc(pnValidate({ nameEn: 'Eggs', nameAr: 'بيض', category: 'dairy', location: 'fridge', trackMode: 'quantity',
+  dimension: 'count', displayUnit: 'piece', minQty: '6', aliases: 'egg', ...input }).value, { uid: u.uid, now: serverTimestamp() }), ...x });
+const pnUp = (u, id, data) => updateDoc(pnPath(db(u), id), { ...data, updatedBy: u.uid, updatedAt: serverTimestamp() });
+async function pantryHome() { await family(); await seedMember('hA', MEMBER_WIFE, 'member'); await seedMember('hA', CHILD_A, 'child'); }
+
+test('V65P01-1 pantry read: inventory.view (owner / admin / member / viewer); child, non-member, other Home, unauthenticated denied', async () => {
+  await pantryHome();
+  await assertSucceeds(setDoc(pnPath(db(OWNER_A), 'pnEggs01'), pnDoc(OWNER_A)), 'owner creates');
+  for (const u of [OWNER_A, ADMIN_A, MEMBER_WIFE, VIEWER_A]) {
+    await assertSucceeds(getDoc(pnPath(db(u), 'pnEggs01')), `${u.uid} reads`);
+    await assertSucceeds(getDocs(query(collection(db(u), 'homes', 'hA', 'pantryProducts'), where('archived', '==', false))), `${u.uid} lists`);
+  }
+  await assertDenied(getDoc(pnPath(db(CHILD_A), 'pnEggs01')), 'child has no inventory.view by default');
+  await assertDenied(getDoc(pnPath(anon(), 'pnEggs01')), 'unauthenticated');
+  await assertDenied(getDoc(pnPath(db(MALLORY), 'pnEggs01')), 'non-member');
+  await assertDenied(getDoc(pnPath(db(OWNER_HOME_B), 'pnEggs01')), 'owner of another Home');
+  await assertDenied(getDocs(collection(db(OWNER_HOME_B), 'homes', 'hA', 'pantryProducts')), 'cross-home list');
+});
+
+test('V65P01-2 pantry create: inventory.create (owner / admin / member); viewer / child / outsider / other Home denied; strict shape; zero stock; no spoofing', async () => {
+  await pantryHome();
+  for (const [u, id] of [[OWNER_A, 'pnOwner1'], [ADMIN_A, 'pnAdmin1'], [MEMBER_WIFE, 'pnWife01']]) await assertSucceeds(setDoc(pnPath(db(u), id), pnDoc(u)), `${u.uid} creates`);
+  await assertSucceeds(setDoc(pnPath(db(OWNER_A), 'pnRice01'), pnDoc(OWNER_A, { nameEn: '', nameAr: 'أرز', dimension: 'mass', displayUnit: 'kg', minQty: '1.5', aliases: '' })), 'Arabic-only name, mass');
+  await assertSucceeds(setDoc(pnPath(db(OWNER_A), 'pnSoap01'), pnDoc(OWNER_A, { nameEn: 'Soap', nameAr: '', trackMode: 'presence', minQty: '' })), 'presence mode');
+  for (const u of [VIEWER_A, CHILD_A, MALLORY]) await assertDenied(setDoc(pnPath(db(u), `pnX${u.uid}`.slice(0, 40)), pnDoc(u)), `${u.uid} cannot create`);
+  await assertDenied(setDoc(pnPath(db(OWNER_HOME_B), 'pnCross1'), pnDoc(OWNER_HOME_B)), 'other Home owner into hA');
+  const bad = [
+    [{ stockMilli: 5000 }, 'non-zero initial stock'], [{ stockRev: 1 }, 'stockRev must start at 0'], [{ presence: 'in' }, 'presence must start unrecorded'],
+    [{ rev: 2 }, 'rev must be 1'], [{ archived: true }, 'cannot create archived'], [{ createdBy: 'ownerA' }, 'createdBy spoof'], [{ updatedBy: 'ownerA' }, 'updatedBy spoof'],
+    [{ createdAt: new Date('2020-01-01') }, 'client timestamp'], [{ schemaVersion: 2 }, 'schema version'], [{ price: 10 }, 'unknown key (price)'], [{ expenseId: 'e1' }, 'unknown key'],
+    [{ nameEn: null, nameAr: null }, 'no name'], [{ nameEn: 'x'.repeat(81) }, 'name too long'], [{ nameEn: '   ' }, 'blank name'], [{ category: 'weapons' }, 'category enum'],
+    [{ location: 'roof' }, 'location enum'], [{ dimension: 'mass', displayUnit: 'piece' }, 'unit / dimension mismatch'], [{ displayUnit: 'cup' }, 'unknown unit'],
+    [{ minMilli: 1500 }, 'fractional pieces threshold'], [{ minMilli: 0 }, 'zero threshold'], [{ minMilli: -1000 }, 'negative threshold'], [{ minMilli: 1000000000001000 }, 'threshold overflow'],
+    [{ minMilli: 6.5 }, 'non-integer threshold'], [{ aliases: ['a', 'a'] }, 'duplicate aliases'], [{ aliases: ['a|b'] }, 'alias separator'], [{ aliases: Array.from({ length: 9 }, (_, i) => `a${i}`) }, 'too many aliases'],
+    [{ aliases: ['x'.repeat(41)] }, 'alias too long'], [{ aliases: [5] }, 'alias type'], [{ note: 'x'.repeat(201) }, 'note too long'], [{ trackMode: 'weight' }, 'track mode enum'],
+  ];
+  for (const [x, why] of bad) await assertDenied(setDoc(pnPath(db(OWNER_A), 'pnBad001'), pnDoc(OWNER_A, {}, x)), why);
+  await assertDenied(setDoc(pnPath(db(OWNER_A), 'pnBad002'), pnDoc(OWNER_A, { trackMode: 'presence' }, { stockMilli: 0 })), 'presence mode with numeric stock');
+  await assertDenied(setDoc(pnPath(db(OWNER_A), 'pnBad003'), pnDoc(OWNER_A, { trackMode: 'presence' }, { dimension: 'count', displayUnit: 'piece' })), 'presence mode with a unit');
+  await assertDenied(setDoc(pnPath(db(OWNER_A), 'pnBad004'), pnDoc(OWNER_A, {}, { stockMilli: null })), 'quantity mode with null stock');
+  await assertDenied(setDoc(pnPath(db(OWNER_A), 'x'), pnDoc(OWNER_A)), 'id format');
+});
+
+test('V65P01-3 pantry update: metadata = inventory.edit with rev + 1; stock fields immutable; trackMode fixed; replay / stale refused; archive = inventory.delete; no delete', async () => {
+  await pantryHome();
+  await assertSucceeds(setDoc(pnPath(db(OWNER_A), 'pnEggs01'), pnDoc(OWNER_A)));
+  await assertSucceeds(pnUp(MEMBER_WIFE, 'pnEggs01', { nameEn: 'Free-range eggs', minMilli: 12000, rev: 2 }), 'member edits metadata');
+  await assertSucceeds(pnUp(ADMIN_A, 'pnEggs01', { dimension: 'mass', displayUnit: 'g', minMilli: 500000, rev: 3 }), 'dimension change while stockRev == 0');
+  await assertDenied(pnUp(MEMBER_WIFE, 'pnEggs01', { nameEn: 'Replay', rev: 3 }), 'revision replay (rev not + 1)');
+  await assertDenied(pnUp(MEMBER_WIFE, 'pnEggs01', { nameEn: 'Skip', rev: 5 }), 'revision skip');
+  await assertDenied(pnUp(VIEWER_A, 'pnEggs01', { nameEn: 'Viewer', rev: 4 }), 'viewer cannot edit');
+  await assertDenied(pnUp(CHILD_A, 'pnEggs01', { nameEn: 'Child', rev: 4 }), 'child cannot edit');
+  await assertDenied(pnUp(OWNER_HOME_B, 'pnEggs01', { nameEn: 'Cross', rev: 4 }), 'other Home cannot edit');
+  for (const [x, why] of [[{ stockMilli: 1000 }, 'stock'], [{ stockRev: 1 }, 'stockRev'], [{ presence: 'in' }, 'presence'], [{ trackMode: 'presence', dimension: null, displayUnit: null, minMilli: null, stockMilli: null }, 'trackMode'],
+    [{ createdBy: MEMBER_WIFE.uid }, 'createdBy'], [{ schemaVersion: 2 }, 'schemaVersion'], [{ archivedAt: serverTimestamp() }, 'archive field without archive'], [{ price: 1 }, 'unknown key'], [{ category: 'nope' }, 'invalid content']])
+    await assertDenied(pnUp(OWNER_A, 'pnEggs01', { ...x, rev: 4 }), `immutable / invalid: ${why}`);
+  await assertDenied(updateDoc(pnPath(db(OWNER_A), 'pnEggs01'), { nameEn: 'Late', rev: 4, updatedBy: OWNER_A.uid, updatedAt: new Date('2020-01-01') }), 'client updatedAt');
+  await assertDenied(updateDoc(pnPath(db(OWNER_A), 'pnEggs01'), { nameEn: 'Who', rev: 4, updatedBy: MEMBER_WIFE.uid, updatedAt: serverTimestamp() }), 'updatedBy spoof');
+  // stock recorded (simulated Phase 02 state) → the dimension is locked
+  await env.withSecurityRulesDisabled(async (c) => { await updateDoc(doc(c.firestore(), 'homes', 'hA', 'pantryProducts', 'pnEggs01'), { stockRev: 1, stockMilli: 250000 }); });
+  await assertDenied(pnUp(OWNER_A, 'pnEggs01', { dimension: 'volume', displayUnit: 'ml', rev: 4 }), 'dimension locked once stock was recorded');
+  await assertSucceeds(pnUp(OWNER_A, 'pnEggs01', { displayUnit: 'kg', rev: 4 }), 'display unit within the same dimension stays editable');
+  // archive / restore
+  await assertDenied(pnUp(MEMBER_WIFE, 'pnEggs01', { archived: true, archivedAt: serverTimestamp(), archivedBy: MEMBER_WIFE.uid, rev: 5 }), 'member cannot archive (inventory.delete)');
+  await assertDenied(pnUp(ADMIN_A, 'pnEggs01', { archived: true, archivedAt: serverTimestamp(), archivedBy: OWNER_A.uid, rev: 5 }), 'archivedBy spoof');
+  await assertDenied(pnUp(ADMIN_A, 'pnEggs01', { archived: true, archivedAt: serverTimestamp(), archivedBy: ADMIN_A.uid, nameEn: 'Sneak', rev: 5 }), 'archive + edit mixed');
+  await assertSucceeds(pnUp(ADMIN_A, 'pnEggs01', { archived: true, archivedAt: serverTimestamp(), archivedBy: ADMIN_A.uid, rev: 5 }), 'admin archives');
+  await assertDenied(pnUp(OWNER_A, 'pnEggs01', { nameEn: 'Archived edit', rev: 6 }), 'archived product is read-only');
+  await assertDenied(pnUp(OWNER_A, 'pnEggs01', { archived: true, archivedAt: serverTimestamp(), archivedBy: OWNER_A.uid, rev: 6 }), 'archive twice');
+  await assertSucceeds(pnUp(OWNER_A, 'pnEggs01', { archived: false, archivedAt: null, archivedBy: null, rev: 6 }), 'owner restores');
+  for (const u of [OWNER_A, ADMIN_A, MEMBER_WIFE, VIEWER_A, CHILD_A, MALLORY]) await assertDenied(deleteDoc(pnPath(db(u), 'pnEggs01')), `${u.uid} cannot delete`);
+});
+
+test('V65P01-4 pantry + customised roles: rules read the role document — a grant added by the owner works, a removed grant is enforced; Phase 01 changes no role template', async () => {
+  await pantryHome();
+  await assertSucceeds(setDoc(pnPath(db(OWNER_A), 'pnMilk01'), pnDoc(OWNER_A, { nameEn: 'Milk', dimension: 'volume', displayUnit: 'l', minQty: '1' })));
+  await env.withSecurityRulesDisabled(async (c) => {
+    const f = c.firestore();
+    const child = (await getDoc(doc(f, 'homes', 'hA', 'roles', 'child'))).data();
+    await updateDoc(doc(f, 'homes', 'hA', 'roles', 'child'), { permissions: [...child.permissions, 'inventory.view'] });
+    const member = (await getDoc(doc(f, 'homes', 'hA', 'roles', 'member'))).data();
+    await updateDoc(doc(f, 'homes', 'hA', 'roles', 'member'), { permissions: member.permissions.filter((p) => p !== 'inventory.edit') });
+  });
+  await assertSucceeds(getDoc(pnPath(db(CHILD_A), 'pnMilk01')), 'custom grant: child may view');
+  await assertDenied(pnUp(CHILD_A, 'pnMilk01', { nameEn: 'Child edit', rev: 2 }), 'view grant does not imply edit');
+  await assertDenied(pnUp(MEMBER_WIFE, 'pnMilk01', { nameEn: 'Member edit', rev: 2 }), 'removed grant enforced for members');
+  await assertSucceeds(setDoc(pnPath(db(MEMBER_WIFE), 'pnWife02'), pnDoc(MEMBER_WIFE, { nameEn: 'Bread', dimension: 'count', displayUnit: 'piece' })), 'other grants untouched');
+});

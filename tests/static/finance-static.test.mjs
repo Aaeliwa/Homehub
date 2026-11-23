@@ -101,9 +101,9 @@ test('phase discipline: no Life Savings / Zakat / gold implementation; no Storag
   // Phase 5: Finance may name the 'zakat' expense category (deliberate payment link) but holds
   // no Nisab / karat / gold-price logic — that belongs to the savings module.
   assert.ok(!/nisab|savingsGoal|goldPrice|karat|hawl/i.test(all));
-  assert.ok(!/match \/(savings|zakat|assets|inventory|shopping)\//.test(rulesCode));   // Phase 5.3: cleaning; 5.5: maintenance have their own rules
+  assert.ok(!/match \/(savings|zakat|assets|inventory|shopping|shoppingItems|shoppingTrips)\//.test(rulesCode));   // V6.5 P01: Pantry uses pantryProducts; Shopping not started   // Phase 5.3: cleaning; 5.5: maintenance have their own rules
   // Phase 5.5: Maintenance implemented; the other planned modules must still not have started.
-  for (const m of ['inventory', 'shopping', 'mealPlanner']) assert.deepEqual(readdirSync(`src/modules/${m}`), ['module.js']);   // V6.1: chef (Recipes) implemented; Meal Planner still NOT started
+  for (const m of ['shopping', 'mealPlanner']) assert.deepEqual(readdirSync(`src/modules/${m}`), ['module.js']);   // V6.5 P01: inventory (Pantry catalog) started; Shopping still NOT   // V6.1: chef (Recipes) implemented; Meal Planner still NOT started
   // Phase 5.5: maintenance costs are metadata only — no Finance store / repository import, no finance writes.
   for (const f of readdirSync('src/modules/maintenance')) {
     const c = readFileSync(`src/modules/maintenance/${f}`, 'utf8');

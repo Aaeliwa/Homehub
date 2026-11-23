@@ -100,6 +100,12 @@ function collectionSnap(path, w, max) {
  */
 function checkQuery(q) {
   const user = currentUser();
+  // V6.5 P01 (mirrors firestore.rules): the Pantry catalog needs inventory.view in THIS home.
+  if (/\/pantryProducts$/.test(q.path)) {
+    const home = q.path.split('/')[1]; const m = state.db[`homes/${home}/members/${user.uid}`];
+    const perms = ((m && m.status === 'active' && state.db[`homes/${home}/roles/${m.roleId}`]) || {}).permissions || [];
+    if (!(perms.includes('*') || perms.includes('inventory.*') || perms.includes('inventory.view'))) throw err('permission-denied');
+  }
   // V6.4 B (mirrors firestore.rules): shared contacts / categories need contacts.view in THIS home.
   if (/\/(contacts|contactCategories)$/.test(q.path)) {
     const home = q.path.split('/')[1]; const m = state.db[`homes/${home}/members/${user.uid}`];

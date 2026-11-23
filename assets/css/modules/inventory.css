@@ -1,0 +1,26 @@
+/* Pantry catalog (V6.5 Phase 01). Theme tokens + logical properties only (RTL / dark safe); 320 px first. */
+.page--pantry { display: grid; gap: 0.9rem; min-inline-size: 0; }
+.pn-notice { margin: 0; }
+.pn-tools { display: grid; gap: 0.5rem; min-inline-size: 0; }
+.pn-search { inline-size: 100%; min-inline-size: 0; min-block-size: 44px; }
+/* category + location always share one row; each select truncates instead of overflowing */
+.pn-filters { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 0.5rem; min-inline-size: 0; }
+.pn-filter { min-inline-size: 0; inline-size: 100%; min-block-size: 44px; text-overflow: ellipsis; white-space: nowrap; overflow: hidden; }
+@media (min-width: 760px) { .pn-tools { grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr); align-items: center; } }
+
+.pn-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.6rem; grid-template-columns: repeat(auto-fill, minmax(min(100%, 20rem), 1fr)); }
+.pn-item { display: flex; align-items: flex-start; gap: 0.25rem; min-inline-size: 0; padding: 0.75rem 0.85rem; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface); }
+.pn-item--archived { opacity: 0.85; border-style: dashed; }
+.pn-item__main { flex: 1 1 auto; display: grid; gap: 0.2rem; min-inline-size: 0; }
+.pn-item__name { font-weight: 800; overflow-wrap: anywhere; }
+.pn-item__alt { font-size: 0.85rem; color: var(--muted); overflow-wrap: anywhere; }
+.pn-item__meta { display: flex; flex-wrap: wrap; gap: 0.3rem; align-items: center; font-size: 0.8rem; color: var(--text-2); }
+.pn-item__mode, .pn-item__min { overflow-wrap: anywhere; }
+.pn-item__stock { font-size: 0.78rem; color: var(--muted); font-style: italic; }
+.pn-item__tools { flex: 0 0 auto; display: flex; flex-wrap: wrap; gap: 0.15rem; justify-content: flex-end; }
+.pn-item__tools .icon-btn { inline-size: 44px; block-size: 44px; }
+
+.pn-form__row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 0.6rem; }
+.pn-form__qty { display: grid; gap: 0.6rem; padding: 0.6rem; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-2); }
+.pn-form__qty[hidden] { display: none; }
+@media (max-width: 360px) { .pn-form__row { grid-template-columns: minmax(0, 1fr); } }

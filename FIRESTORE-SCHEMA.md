@@ -321,7 +321,7 @@ Each module adds its collections under its home, and its rules, in its own phase
 | Cleaning | `homes/{h}/cleaningTasks/{id}`, `homes/{h}/cleaningLog/{id}` | `cleaning.*` |
 | Maintenance | `homes/{h}/maintenance/{id}` | `maintenance.*` |
 | Contacts | `homes/{h}/contacts/{id}` | `contacts.*` |
-| Inventory | `homes/{h}/inventory/{id}` | `inventory.*` |
+| Inventory (Pantry) | `homes/{h}/pantryProducts/{id}` (V6.5 Phase 01: catalog) | `inventory.*` |
 | Shopping | `homes/{h}/shoppingItems/{id}` | `shopping.*` |
 
 Exact names are decided in each module's phase and recorded here.
@@ -557,3 +557,27 @@ Two OPTIONAL keys on `homes/{h}/contacts/{contactId}`. Contacts written before 6
 **Derived, never stored:** the Dashboard Upcoming panel, the Contacts activity panels and Calendar / Finance reminders are computed client-side from the stores already loaded for the current Home.
 
 **Rules cost:** calendarEvents create 617 → 691, update 507 → 554; reminderStates / reminderPrefs remain small; maximum unchanged at 1053 (contacts create), 0 rules above 1100.
+
+### V6.5 Phase 01: Pantry product catalog — `homes/{h}/pantryProducts/{productId}`
+
+New collection; no migration; no existing collection changed. Id: `^[A-Za-z0-9_-]{6,40}$` (Firestore auto id).
+
+| Field | Type | Rules |
+|---|---|---|
+| `nameEn`, `nameAr` | string ≤ 80 or null | at least one non-null; never auto-translated |
+| `category` | enum | produce, dairy, meat, bakery, grains, canned, frozen, drinks, snacks, spices, condiments, cleaning, personal, baby, other |
+| `location` | enum | pantry, fridge, freezer, cupboard, bathroom, laundry, other |
+| `trackMode` | `quantity` or `presence` | fixed at creation |
+| `dimension` | `count`, `mass`, `volume` or null | null exactly for presence; changeable only while `stockRev == 0` |
+| `displayUnit` | piece / g, kg / ml, l, or null | must belong to the dimension |
+| `minMilli` | int or null | low-stock threshold in base milli-units (piece / g / ml × 1000); 0 < x ≤ 10^12; whole pieces |
+| `aliases` | string list ≤ 8, each ≤ 40, unique, no pipe character | search / future recipe-matching hints |
+| `note` | string ≤ 200 or null | |
+| `stockMilli` | int (quantity: 0 at creation) or null (presence) | **authoritative stock; immutable in Phase 01** |
+| `presence` | null, in, low, out | null at creation; **immutable in Phase 01** |
+| `stockRev` | int, 0 at creation | stock sequence for Phase 02 movements; **immutable in Phase 01** |
+| `archived`, `archivedAt`, `archivedBy` | bool, server time or null, uid or null | archive / restore = `inventory.delete`; an archived product is read-only |
+| `rev` | int | metadata revision; every update = rev + 1 |
+| `createdBy`, `createdAt`, `updatedBy`, `updatedAt`, `schemaVersion: 1` | | server timestamps, caller uid |
+
+Reads: one bounded listener `archived == false` (limit 501, truncation notice above 500); archived list on demand (limit 201). No composite index. No delete (`allow delete: if false`). Phase 02 adds a separate stock branch (stock fields + `stockRev` only, proven against an immutable movement); catalog edits never touch stock fields (update masks).

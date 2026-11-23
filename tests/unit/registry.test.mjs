@@ -31,21 +31,21 @@ test('registry rejects duplicate ids and orders by `order`', () => {
 test('V6.2: twelve modules registered; the implemented ones enabled (+ calendar)', () => {
   const ids = registry.all().map((m) => m.id);
   assert.deepEqual(ids, ['expenses', 'calendar', 'savings', 'chef', 'mealPlanner', 'cleaning', 'maintenance', 'contacts', 'inventory', 'shopping', 'rooms', 'devices']);   // V6.2: + calendar
-  const ENABLED = ['expenses', 'savings', 'cleaning', 'maintenance', 'rooms', 'devices', 'chef', 'calendar', 'contacts'];   // V6.4 B: + contacts   // V6.2 + calendar  // 5.3 + cleaning; 5.5 + maintenance; V6.1 + chef (Recipes)
+  const ENABLED = ['expenses', 'savings', 'cleaning', 'maintenance', 'rooms', 'devices', 'chef', 'calendar', 'contacts', 'inventory'];   // V6.5 P01: + inventory (Pantry catalog)   // V6.4 B: + contacts   // V6.2 + calendar  // 5.3 + cleaning; 5.5 + maintenance; V6.1 + chef (Recipes)
   for (const id of ENABLED) {
     const m = registry.get(id);
     assert.equal(m.enabled, true, id);
     assert.equal(typeof m.page, 'function');
-    if (id === 'savings' || id === 'contacts') assert.equal(m.dashboardWidget, null, 'no dashboard tile (V6.1 Life Savings; V6.4 B Contacts: Tools + navigation only)');
+    if (id === 'savings' || id === 'contacts' || id === 'inventory') assert.equal(m.dashboardWidget, null, 'no dashboard tile (V6.1 Life Savings; V6.4 B Contacts: Tools + navigation only)');
     else if (id === 'rooms' || id === 'devices') { assert.equal(m.dashboardWidget, null, 'V6.4: no standalone tile'); assert.equal(typeof m.homeCount.load, 'function', 'V6.4: active count in the Your Home card'); }
     else assert.equal(typeof m.dashboardWidget.load, 'function');
   }
   const others = registry.all().filter((m) => !ENABLED.includes(m.id));
   assert.ok(others.every((m) => m.enabled === false && m.page === null && m.dashboardWidget === null));
-  for (const id of ['inventory', 'shopping', 'mealPlanner']) assert.equal(registry.get(id).enabled, false, `${id} not started`);   // V6.1: Meal Planner is future work
+  for (const id of ['shopping', 'mealPlanner']) assert.equal(registry.get(id).enabled, false, `${id} not started`);   // V6.5 P01: Pantry started; Shopping NOT   // V6.1: Meal Planner is future work
   const owner = createPermissionSet(['*']);
   assert.equal(registry.visibleFor(owner).length, 12);   // V6.2: + calendar
-  assert.deepEqual(registry.navigableFor(owner).map((m) => m.id), ['expenses', 'calendar', 'savings', 'chef', 'cleaning', 'maintenance', 'contacts', 'rooms', 'devices']);   // V6.4 B: + contacts (dock + rail + Tools)   // separate destinations (V6.2: + calendar)
+  assert.deepEqual(registry.navigableFor(owner).map((m) => m.id), ['expenses', 'calendar', 'savings', 'chef', 'cleaning', 'maintenance', 'contacts', 'inventory', 'rooms', 'devices']);   // V6.5 P01: + inventory   // V6.4 B: + contacts (dock + rail + Tools)   // separate destinations (V6.2: + calendar)
   assert.deepEqual(registry.widgetsFor(owner).map((m) => m.id), ['calendar', 'expenses', 'chef', 'cleaning', 'maintenance']);   // widget order 3,5,8,15,17 (V6.2: calendar month first) (V6.1: timers panel; no Life Savings tile) (V6.4: Rooms / Devices tiles → Your Home counts)
   assert.deepEqual(registry.homeCountsFor(owner).map((m) => m.id), ['rooms', 'devices']);
   assert.ok(registry.navigableFor(owner).some((m) => m.id === 'savings'), 'Life Savings still navigable');

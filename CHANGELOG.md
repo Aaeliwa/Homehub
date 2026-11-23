@@ -1,5 +1,11 @@
 # Changelog
 
+## 6.5.0-p01 — V6.5 Phase 01: Pantry product catalog (November 2026) — NOT DEPLOYED, awaiting review
+
+- **Pantry (Inventory module) enabled** as a shared, bilingual product catalog: add, edit, archive / restore; search in English or Arabic (diacritics, tatweel, alef forms, ة/ه and Arabic digits folded; aliases), category and place filters; quantity (pieces, g / kg, ml / l) or presence tracking; optional low-stock level; similar-name warning; empty, loading, error and truncation states; 320 px, RTL and dark.
+- **Stock tracking is not enabled yet** and is labelled as such; products are created with zero / unrecorded stock that Phase 01 never changes.
+- New collection `pantryProducts` with strict rules (`inventory.*`, seeded since role template v1 — no template change). Integer milli base units (no floating point). Shopping stays disabled; no Finance link.
+
 ## 6.4.1-b — V6.4.1 Stage B: Upcoming, contact activities, Calendar / Bills reminders (November 2026) — NOT DEPLOYED, awaiting review
 
 - **Dashboard Upcoming panel:** one chronological list — overdue, today, next 7 days — across Calendar events and tasks, contact activities, bills (Finance commitments, next due date only), Cleaning (one "Pending cleaning tasks" row) and Maintenance plans. Title, date / time, category and status; each row opens its module at the right place. EN / AR, light / dark, 320 px and up; loading, error and empty states. Independent of reminder settings. The old Reminders dashboard card is not restored.

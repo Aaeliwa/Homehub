@@ -455,3 +455,19 @@ The URL checks are **syntactic and best-effort**. HomeHub has no server, proxy o
 - **Calendar fields:** validated by the rules (`calLinkOk`): fixed kind / status / offset values, contact id format; no contact read per write (cost) — a link to a missing contact reveals nothing. Private activities: creator only, no admin override (unchanged Calendar rule).
 - **No push or OS notifications, no Cloud Functions, no new collection.** In-app only, while the app is open.
 - **Navigation intents** (Upcoming → Calendar / Bills / Contact) are in-memory, read-once and Home-scoped: never in the URL, ignored by another Home.
+
+## V6.5 Phase 01: Pantry product catalog
+
+| Action | Permission | Owner | Admin | Member | Viewer | Child | Other Home |
+|---|---|---|---|---|---|---|---|
+| View catalog | `inventory.view` | ✓ | ✓ | ✓ | ✓ | ✗ (unless granted) | ✗ |
+| Add product | `inventory.create` | ✓ | ✓ | ✓ | ✗ | ✗ | ✗ |
+| Edit catalog fields | `inventory.edit` | ✓ | ✓ | ✓ | ✗ | ✗ | ✗ |
+| Archive / restore | `inventory.delete` | ✓ | ✓ | ✗ | ✗ | ✗ | ✗ |
+| Delete | none | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ |
+| Change stock | none (Phase 02) | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ |
+
+- **No role-template change.** These are the `inventory.*` grants seeded since template v1; customised roles are not touched or upgraded, and the rules read the stored role document (a grant removed by the owner is enforced, one added is honoured).
+- **Rules (`pantryProducts`):** active membership of the same Home via `can()`; exact keys; bounded strings, aliases and integers (≤ 10^12, whole pieces); zero / unrecorded stock and `stockRev == 0` at creation; stock fields in no update mask; `rev + 1` on every change (replay and stale edits refused); server timestamps and caller uid; archive transitions; no delete.
+- **No Finance link:** a static test forbids Finance imports and money / expense fields in the Pantry and Shopping folders.
+- Not in Phase 01: stock changes, movements, consumption rules, Shopping, Chef links. Offline: reads keep the open tab's in-memory snapshot; writes need a connection (Firestore memory cache only).

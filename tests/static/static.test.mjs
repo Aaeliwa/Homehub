@@ -104,7 +104,7 @@ test('index.html references existing local assets', () => {
 
 test('planned module directories contain registration metadata only', () => {
   // Phase 2: rooms; Phase 3: devices; Phase 4: expenses (finance); Phase 5: savings. Others: metadata only.
-  const IMPLEMENTED = new Set(['rooms', 'devices', 'expenses', 'savings', 'cleaning', 'maintenance', 'chef', 'calendar', 'contacts']);   // V6.4 B: + contacts   // V6.2: + calendar   // + 5.3 cleaning; 5.5 maintenance; V6.1 chef (Recipes)
+  const IMPLEMENTED = new Set(['rooms', 'devices', 'expenses', 'savings', 'cleaning', 'maintenance', 'chef', 'calendar', 'contacts', 'inventory']);   // V6.5 P01: + inventory (Pantry catalog)   // V6.4 B: + contacts   // V6.2: + calendar   // + 5.3 cleaning; 5.5 maintenance; V6.1 chef (Recipes)
   for (const dir of readdirSync('src/modules').filter((d) => statSync(join('src/modules', d)).isDirectory())) {
     if (IMPLEMENTED.has(dir)) continue;
     assert.deepEqual(readdirSync(join('src/modules', dir)), ['module.js'], dir);

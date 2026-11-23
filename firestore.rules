@@ -1127,6 +1127,28 @@ service cloud.firestore {
              && catId == 's_' + d.key && (d.name == null || isName(d.name, 40))));
     }
 
+    // ================================================================= V6.5 PANTRY catalog (Phase 01) — mirrors product-model.js
+    // Quantities are integer milli base units (piece / g / ml), 0 … 10^12; whole pieces for count. Phase 01 never
+    // changes stock: stockMilli / presence / stockRev are fixed at creation (quantity: 0 / null / 0; presence: null / null / 0).
+    function pnName(v) { return v == null || isName(v, 80); }
+    function pnMilliOk(v, dim) { return v is int && v >= 0 && v <= 1000000000000 && (dim != 'count' || v % 1000 == 0); }
+    function pnContentOk(d) {
+      return pnName(d.nameEn) && pnName(d.nameAr) && (d.nameEn != null || d.nameAr != null)
+        && d.category in ['produce', 'dairy', 'meat', 'bakery', 'grains', 'canned', 'frozen', 'drinks', 'snacks', 'spices', 'condiments', 'cleaning', 'personal', 'baby', 'other']
+        && d.location in ['pantry', 'fridge', 'freezer', 'cupboard', 'bathroom', 'laundry', 'other']
+        && isOptionalText(d.note, 200)
+        && d.aliases is list && d.aliases.size() <= 8 && d.aliases.toSet().size() == d.aliases.size()
+        && (d.aliases.size() == 0 || d.aliases.join('|').matches('^[^|]{1,40}([|][^|]{1,40}){0,7}$'))
+        && d.stockRev is int && d.stockRev >= 0
+        && (d.trackMode == 'quantity'
+              ? (((d.dimension == 'count' && d.displayUnit == 'piece') || (d.dimension == 'mass' && d.displayUnit in ['g', 'kg'])
+                    || (d.dimension == 'volume' && d.displayUnit in ['ml', 'l']))
+                 && d.presence == null && pnMilliOk(d.stockMilli, d.dimension)
+                 && (d.minMilli == null || (pnMilliOk(d.minMilli, d.dimension) && d.minMilli > 0)))
+              : (d.trackMode == 'presence' && d.dimension == null && d.displayUnit == null && d.minMilli == null
+                 && d.stockMilli == null && d.presence in [null, 'in', 'low', 'out']));
+    }
+
     // ================================================================= V6.2 CALENDAR + MONTHLY BUDGET
     function calTimeOk(v) { return v == null || (v is string && v.matches('^([01][0-9]|2[0-3]):[0-5][0-9]$')); }
     function calContentOk(d) {
@@ -2580,6 +2602,36 @@ service cloud.firestore {
         allow update: if changed().hasOnly(['name', 'order', 'rev', 'updatedBy', 'updatedAt']) && incoming().rev == resource.data.rev + 1
           && stampedBy() && contactCategoryOk(incoming(), catId) && can(h, 'contacts', 'manageCategories');
         allow delete: if can(h, 'contacts', 'manageCategories');
+      }
+
+      // =================================================== V6.5 PANTRY — product catalog (Phase 01; inventory.*)
+      // Catalog only: create / edit / archive. Stock fields are written once at creation and are immutable here
+      // (Phase 02 adds a separate, movement-proven stock branch with its own stockRev). No delete — archive.
+      match /pantryProducts/{productId} {
+        allow get, list: if can(h, 'inventory', 'view');
+        allow create: if productId.matches('^[A-Za-z0-9_-]{6,40}$')
+          && exactKeys(['nameEn', 'nameAr', 'category', 'location', 'trackMode', 'dimension', 'displayUnit', 'minMilli', 'aliases', 'note',
+                        'stockMilli', 'presence', 'stockRev', 'archived', 'archivedAt', 'archivedBy', 'rev', 'createdBy', 'createdAt', 'updatedBy', 'updatedAt', 'schemaVersion'])
+          && pnContentOk(incoming())
+          && (incoming().trackMode == 'quantity' ? incoming().stockMilli == 0 : incoming().stockMilli == null)
+          && incoming().presence == null && incoming().stockRev == 0
+          && incoming().archived == false && incoming().archivedAt == null && incoming().archivedBy == null
+          && incoming().rev == 1 && incoming().createdBy == request.auth.uid && stampedNow('createdAt') && stampedBy() && incoming().schemaVersion == 1
+          && can(h, 'inventory', 'create');
+        // One revision per change (stale editors refused). trackMode is fixed; the dimension only while no stock was
+        // ever recorded (stockRev == 0). Archive / restore = inventory.delete; an archived product is read-only.
+        allow update: if incoming().rev == resource.data.rev + 1 && stampedBy()
+          && ('archived' in changed()
+            ? (changed().hasOnly(['archived', 'archivedAt', 'archivedBy', 'rev', 'updatedBy', 'updatedAt'])
+               && (incoming().archived == true
+                     ? (resource.data.archived == false && incoming().archivedAt == request.time && incoming().archivedBy == request.auth.uid)
+                     : (resource.data.archived == true && incoming().archivedAt == null && incoming().archivedBy == null))
+               && can(h, 'inventory', 'delete'))
+            : (resource.data.archived == false
+               && changed().hasOnly(['nameEn', 'nameAr', 'category', 'location', 'dimension', 'displayUnit', 'minMilli', 'aliases', 'note', 'rev', 'updatedBy', 'updatedAt'])
+               && (!('dimension' in changed()) || resource.data.stockRev == 0)
+               && pnContentOk(incoming()) && can(h, 'inventory', 'edit')));
+        allow delete: if false;
       }
 
       // Future module collections (expenses, recipes, cleaning…) are added here, each

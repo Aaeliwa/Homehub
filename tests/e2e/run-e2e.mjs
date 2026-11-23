@@ -154,7 +154,8 @@ await check('A7 dashboard: correct home, user, owner role, coming-soon tools + F
   assert.match(t, /Abdo Adel/);
   assert.match(t, /المالك/);
   // Phase 5.3: Cleaning; Phase 5.5: Maintenance — 5 planned tiles remain.
-  assert.equal(await page.locator('.tile--planned').count(), 3);   // V6.1: Recipes implemented; V6.4 B: Contacts implemented
+  assert.equal(await page.locator('.tile--planned').count(), 2);   // V6.1: Recipes implemented; V6.4 B: Contacts implemented; V6.5 P01: Pantry implemented (Meal planner + Shopping remain)
+  assert.equal(await page.locator('.tile--planned[href="#/m/inventory"]').count(), 0, 'V6.5 P01: Pantry is no longer planned');
   assert.equal(await page.locator('.tile:not(.tile--planned)[href="#/m/expenses"]').count(), 1);
   assert.equal(await page.locator('.tile:not(.tile--planned)[href="#/m/rooms"]').count(), 1);
   assert.equal(await page.locator('.tile:not(.tile--planned)[href="#/m/devices"]').count(), 1);
@@ -481,7 +482,7 @@ await check('D1 dashboard: Your Home card shows devices (empty) + Devices in nav
   await page.locator('#home-rooms-count[data-count]').waitFor();
   assert.equal(await page.locator('.summary-card[href="#/m/devices"], .summary-card[href="#/m/rooms"]').count(), 0);
   assert.equal(await page.locator('.rail a[href="#/m/devices"]').count(), 1);
-  assert.equal(await page.locator('.tile--planned').count(), 3, 'V6.4 B: 3 planned (Cleaning, Maintenance, Recipes, Contacts implemented)');
+  assert.equal(await page.locator('.tile--planned').count(), 2, 'V6.5 P01: 2 planned (Meal planner, Shopping); Pantry implemented');
 });
 
 await check('D2 Devices empty state with 6 templates; nothing written', async () => {
@@ -4736,6 +4737,135 @@ await check('V641-B Contact activities: Contacts panel (no per-contact listener)
   await login('mona@example.com'); await page.locator('#up-panel .up-item').first().waitFor();
   assert.equal(await page.locator('#up-panel .up-item[data-source="commitment"]').count(), 0, 'child: no Finance → no bills');
   assert.ok(!/Internet bill|EGP/.test(await page.locator('#up-panel').innerText()));
+  await logout();
+  assert.deepEqual(page.errors.slice(err0), []);
+});
+
+// ======================================================================== V6.5 Phase 01 — Pantry product catalog
+async function seed65(p, H, { monaRole = 'viewer', lang = 'en' } = {}) {
+  await p.evaluate(async ({ h, monaRole, lang }) => {
+    const { defaultRoles } = await import('/src/modules/index.js');
+    const now = new Date().toISOString();
+    window.__fake.set(`homes/${h}`, { name: 'Pantry Home', createdBy: 'UID_OWNER', currency: 'EGP', timezone: 'Africa/Cairo', language: lang });
+    for (const r of defaultRoles()) window.__fake.set(`homes/${h}/roles/${r.id}`, { name: r.name, rank: r.rank, permissions: r.permissions, system: true, templateVersion: 9 });
+    window.__fake.set(`homes/${h}/members/UID_OWNER`, { uid: 'UID_OWNER', email: 'owner@example.com', displayName: 'Abdo', roleId: 'owner', status: 'active', joinedAt: now });
+    window.__fake.set(`homes/${h}/members/UID_MONA`, { uid: 'UID_MONA', email: 'mona@example.com', displayName: 'Mona', roleId: monaRole, status: 'active', joinedAt: now });
+    for (const u of ['UID_OWNER', 'UID_MONA']) window.__fake.patch(`users/${u}`, { defaultHomeId: h, language: lang });
+  }, { h: H, monaRole, lang });
+}
+const pnDocs = (p, H) => p.evaluate((h) => Object.entries(window.__fake.dump()).filter(([k]) => k.startsWith(`homes/${h}/pantryProducts/`)).map(([k, v]) => ({ id: k.split('/').pop(), ...v })), H);
+async function pnFill(p, x) {
+  if (x.en !== undefined) await p.fill('#pn-f-en', x.en);
+  if (x.ar !== undefined) await p.fill('#pn-f-ar', x.ar);
+  if (x.cat) await p.selectOption('#pn-f-cat', x.cat);
+  if (x.loc) await p.selectOption('#pn-f-loc', x.loc);
+  if (x.mode) await p.selectOption('#pn-f-mode', x.mode);
+  if (x.dim) await p.selectOption('#pn-f-dim', x.dim);
+  if (x.unit) await p.selectOption('#pn-f-unit', x.unit);
+  if (x.min !== undefined) await p.fill('#pn-f-min', x.min);
+  if (x.aliases !== undefined) await p.fill('#pn-f-aliases', x.aliases);
+}
+const pnSave = async (p) => { await p.click('dialog[open] button[form="pn-form"]'); };
+
+await check('V65-P01 Pantry catalog: create EN / AR-only / presence products (zero stock, no stock controls), validation, bilingual search + filters, edit (field mask, rev + 1), similar-name warning, archive / restore, no delete', async () => {
+  await ensureSignedOut(); const err0 = page.errors.length; const H = 'hV65P1';
+  await seed65(page, H);
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await login('owner@example.com'); await page.locator('.hero__home').waitFor();
+  assert.equal(await page.locator('.nav-link[href="#/m/inventory"]').count() > 0, true, 'Pantry is in the navigation');
+  await page.goto(BASE + '#/m/inventory'); await page.locator('#pn-empty').waitFor();
+  assert.match(await page.locator('#pn-notice').innerText(), /not enabled yet/i, 'stock tracking clearly labelled as not enabled');
+  // validation
+  await page.click('#pn-new'); await page.locator('#pn-form').waitFor();
+  await pnSave(page); await page.locator('#pn-f-msg .banner--error').waitFor();
+  assert.match(await page.locator('#pn-f-msg').innerText(), /name in English or Arabic/);
+  await pnFill(page, { en: 'Eggs', min: '2.5' }); await pnSave(page);
+  await page.waitForFunction(() => /whole numbers/.test(document.querySelector('#pn-f-msg').innerText));
+  await pnFill(page, { min: '6', cat: 'dairy', loc: 'fridge', aliases: 'egg, بيضة' }); await pnSave(page);
+  await page.locator('#pn-form').waitFor({ state: 'detached' }); await page.locator('#pn-list .pn-item').first().waitFor();
+  // Arabic-only, mass in kg with a decimal threshold
+  await page.click('#pn-new'); await pnFill(page, { en: '', ar: 'أرز بسمتي', cat: 'grains', loc: 'pantry', dim: 'mass', unit: 'kg', min: '1.5', aliases: 'rice' }); await pnSave(page);
+  await page.locator('#pn-form').waitFor({ state: 'detached' });
+  // presence mode
+  await page.click('#pn-new'); await pnFill(page, { en: 'Dish soap', cat: 'cleaning', loc: 'cupboard', mode: 'presence' });
+  assert.equal(await page.locator('#pn-f-qty').isVisible(), false, 'presence mode hides unit / threshold'); await pnSave(page);
+  await page.locator('#pn-form').waitFor({ state: 'detached' });
+  await page.waitForFunction(() => document.querySelectorAll('#pn-list .pn-item').length === 3);
+  const docs = Object.fromEntries((await pnDocs(page, H)).map((d) => [d.nameEn || d.nameAr, d]));
+  assert.deepEqual([docs.Eggs.stockMilli, docs.Eggs.stockRev, docs.Eggs.minMilli, docs.Eggs.dimension, docs.Eggs.displayUnit, docs.Eggs.rev, docs.Eggs.nameAr], [0, 0, 6000, 'count', 'piece', 1, null], 'EN-only: no invented Arabic name');
+  assert.deepEqual([docs['أرز بسمتي'].nameEn, docs['أرز بسمتي'].minMilli, docs['أرز بسمتي'].displayUnit, docs['أرز بسمتي'].aliases], [null, 1500000, 'kg', ['rice']]);
+  assert.deepEqual([docs['Dish soap'].stockMilli, docs['Dish soap'].presence, docs['Dish soap'].dimension, docs['Dish soap'].minMilli], [null, null, null, null]);
+  assert.ok(Object.values(docs).every((d) => d.archived === false && d.createdBy === 'UID_OWNER' && d.schemaVersion === 1));
+  assert.equal(await page.locator('#pn-list .pn-item__stock').count(), 3); assert.equal(await page.locator('#pn-list [data-action*="stock"], #pn-list input[type=number]').count(), 0, 'no stock controls');
+  // search in either language (normalised), alias, filters
+  const names = () => page.locator('#pn-list .pn-item__name').allInnerTexts();
+  await page.fill('#pn-search', 'ارز'); await page.waitForTimeout(100); assert.deepEqual(await names(), ['أرز بسمتي'], 'Arabic without hamza finds أرز');
+  await page.fill('#pn-search', 'RICE'); await page.waitForTimeout(100); assert.deepEqual(await names(), ['أرز بسمتي'], 'alias, case-insensitive');
+  await page.fill('#pn-search', 'بيضه'); await page.waitForTimeout(100); assert.deepEqual(await names(), ['Eggs'], 'Arabic alias with ة / ه folding');
+  await page.fill('#pn-search', 'zzz'); await page.locator('#pn-nomatch').waitFor();
+  await page.fill('#pn-search', ''); await page.selectOption('#pn-cat', 'cleaning'); await page.waitForTimeout(100); assert.deepEqual(await names(), ['Dish soap']);
+  await page.selectOption('#pn-cat', 'all'); await page.selectOption('#pn-loc', 'fridge'); await page.waitForTimeout(100); assert.deepEqual(await names(), ['Eggs']);
+  await page.selectOption('#pn-loc', 'all');
+  // edit: field mask only, rev + 1; similar-name warning
+  const eggsId = docs.Eggs.id;
+  await page.locator(`.pn-item[data-id="${eggsId}"] [data-action="edit"]`).click(); await page.locator('#pn-form').waitFor();
+  assert.equal(await page.locator('#pn-f-mode').isDisabled(), true, 'tracking mode fixed on edit');
+  await page.fill('#pn-f-ar', 'أرز بسمتي'); await page.locator('#pn-f-similar .banner').waitFor(); await page.fill('#pn-f-ar', 'بيض');
+  await page.fill('#pn-f-min', '12'); await pnSave(page); await page.locator('#pn-form').waitFor({ state: 'detached' });
+  const eggs = (await pnDocs(page, H)).find((d) => d.id === eggsId);
+  assert.deepEqual([eggs.nameAr, eggs.minMilli, eggs.rev, eggs.stockMilli, eggs.stockRev], ['بيض', 12000, 2, 0, 0]);
+  // archive (confirm) → hidden → Archived tab → restore
+  await page.locator(`.pn-item[data-id="${eggsId}"] [data-action="archive"]`).click();
+  await page.click('dialog[open][role=alertdialog] .btn--danger');
+  await page.locator(`.pn-item[data-id="${eggsId}"]`).waitFor({ state: 'detached' });
+  assert.equal((await pnDocs(page, H)).find((d) => d.id === eggsId).archived, true, 'archived, not deleted');
+  await page.click('#pn-tab-archived'); await page.locator(`.pn-item--archived[data-id="${eggsId}"]`).waitFor();
+  await page.locator(`.pn-item[data-id="${eggsId}"] [data-action="restore"]`).click();
+  await page.locator('#pn-empty').waitFor(); await page.click('#pn-tab-active');
+  await page.locator(`.pn-item[data-id="${eggsId}"]`).waitFor();
+  assert.equal((await pnDocs(page, H)).length, 3, 'nothing was ever deleted');
+  assert.deepEqual(page.errors.slice(err0), []);
+  await logout();
+});
+
+await check('V65-P01 Pantry permissions + layout: viewer read-only (no add / edit / archive); member edits but cannot archive; child has no Pantry; AR RTL dark at 320–412 without overflow; listeners released on sign-out', async () => {
+  await ensureSignedOut(); const err0 = page.errors.length; const H = 'hV65P2';
+  await seed65(page, H, { monaRole: 'viewer', lang: 'ar' });
+  await page.evaluate((h) => {
+    const now = new Date().toISOString();
+    const P = (id, x) => window.__fake.set(`homes/${h}/pantryProducts/${id}`, { nameEn: null, nameAr: null, category: 'other', location: 'pantry', trackMode: 'quantity', dimension: 'count', displayUnit: 'piece',
+      minMilli: null, aliases: [], note: null, stockMilli: 0, presence: null, stockRev: 0, archived: false, archivedAt: null, archivedBy: null, rev: 1, createdBy: 'UID_OWNER', createdAt: now, updatedBy: 'UID_OWNER', updatedAt: now, schemaVersion: 1, ...x });
+    P('pnMilk01', { nameEn: 'Full-cream milk (long life, family pack)', nameAr: 'حليب كامل الدسم طويل الأجل عبوة عائلية كبيرة', category: 'dairy', location: 'fridge', dimension: 'volume', displayUnit: 'l', minMilli: 2000000 });
+    P('pnSalt01', { nameAr: 'ملح', category: 'spices', trackMode: 'presence', dimension: null, displayUnit: null, stockMilli: null });
+  }, H);
+  await login('mona@example.com'); await page.locator('.hero__home').waitFor();
+  await page.goto(BASE + '#/m/inventory'); await page.locator('#pn-list .pn-item').nth(1).waitFor();
+  assert.equal(await page.locator('#pn-new, [data-action="edit"], [data-action="archive"], #pn-tab-archived').count(), 0, 'viewer: read-only');
+  assert.equal(await page.evaluate(() => document.documentElement.dir), 'rtl');
+  await ensureTheme(page, 'dark');
+  for (const w of [320, 360, 412]) {
+    await page.setViewportSize({ width: w, height: 800 }); await page.waitForTimeout(100);
+    assert.ok((await page.evaluate(() => document.documentElement.scrollWidth - innerWidth)) <= 0, `AR dark ${w}: no horizontal overflow`);
+    const a = await page.locator('#pn-cat').boundingBox(); const b = await page.locator('#pn-loc').boundingBox(); assert.ok(Math.abs(a.y - b.y) < 4, `${w}: filters side by side`);
+  }
+  await shot(page, '94-v65p01-pantry-ar-dark-320');
+  assert.ok(await page.evaluate((h) => window.__fake.listenerCountPrefix(`homes/${h}/pantryProducts`), H) >= 1);
+  await page.setViewportSize({ width: 1280, height: 900 }); await ensureTheme(page, 'light');
+  await logout();
+  assert.equal(await page.evaluate((h) => window.__fake.listenerCountPrefix(`homes/${h}/pantryProducts`), H), 0, 'listener released on sign-out');
+  // member: edit yes, archive no
+  await page.evaluate((h) => window.__fake.patch(`homes/${h}/members/UID_MONA`, { roleId: 'member' }), H);
+  await login('mona@example.com'); await page.goto(BASE + '#/m/inventory'); await page.locator('#pn-list .pn-item').first().waitFor();
+  assert.ok((await page.locator('[data-action="edit"]').count()) === 2 && (await page.locator('#pn-new').count()) === 1);
+  assert.equal(await page.locator('[data-action="archive"], #pn-tab-archived').count(), 0, 'member cannot archive');
+  await logout();
+  // child: no Pantry at all (default role)
+  await page.evaluate((h) => window.__fake.patch(`homes/${h}/members/UID_MONA`, { roleId: 'child' }), H);
+  await login('mona@example.com'); await page.locator('.hero__home').waitFor();
+  assert.equal(await page.locator('.nav-link[href="#/m/inventory"]').count(), 0, 'child: not in navigation');
+  await page.goto(BASE + '#/m/inventory'); await page.waitForTimeout(600);
+  assert.equal(await page.locator('#pn-page .pn-item').count(), 0, 'child: no products rendered');
+  assert.equal(await page.evaluate((h) => window.__fake.listenerCountPrefix(`homes/${h}/pantryProducts`), H), 0, 'child: no listener');
   await logout();
   assert.deepEqual(page.errors.slice(err0), []);
 });
