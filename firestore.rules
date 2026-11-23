@@ -1132,13 +1132,19 @@ service cloud.firestore {
     // changes stock: stockMilli / presence / stockRev are fixed at creation (quantity: 0 / null / 0; presence: null / null / 0).
     function pnName(v) { return v == null || isName(v, 80); }
     function pnMilliOk(v, dim) { return v is int && v >= 0 && v <= 1000000000000 && (dim != 'count' || v % 1000 == 0); }
+    function pnAliasOk(a, i) {
+      return a.size() <= i || (a[i] is string && a[i].matches('^[^|]{1,40}$'));
+    }
     function pnContentOk(d) {
       return pnName(d.nameEn) && pnName(d.nameAr) && (d.nameEn != null || d.nameAr != null)
         && d.category in ['produce', 'dairy', 'meat', 'bakery', 'grains', 'canned', 'frozen', 'drinks', 'snacks', 'spices', 'condiments', 'cleaning', 'personal', 'baby', 'other']
         && d.location in ['pantry', 'fridge', 'freezer', 'cupboard', 'bathroom', 'laundry', 'other']
         && isOptionalText(d.note, 200)
         && d.aliases is list && d.aliases.size() <= 8 && d.aliases.toSet().size() == d.aliases.size()
-        && (d.aliases.size() == 0 || d.aliases.join('|').matches('^[^|]{1,40}([|][^|]{1,40}){0,7}$'))
+        && pnAliasOk(d.aliases, 0) && pnAliasOk(d.aliases, 1)
+        && pnAliasOk(d.aliases, 2) && pnAliasOk(d.aliases, 3)
+        && pnAliasOk(d.aliases, 4) && pnAliasOk(d.aliases, 5)
+        && pnAliasOk(d.aliases, 6) && pnAliasOk(d.aliases, 7)
         && d.stockRev is int && d.stockRev >= 0
         && (d.trackMode == 'quantity'
               ? (((d.dimension == 'count' && d.displayUnit == 'piece') || (d.dimension == 'mass' && d.displayUnit in ['g', 'kg'])
