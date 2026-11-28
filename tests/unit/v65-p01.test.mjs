@@ -151,12 +151,17 @@ test('P01 store: one bounded listener, confirmed writes, update masks (never set
 });
 
 // ------------------------------------------------------------------------------------------------ permissions / static guards
-test('P01 permissions: no role-template change (customised grants untouched); defaults: no child access, delete (archive) admin only', () => {
-  assert.equal(ROLE_TEMPLATE_VERSION, 9, 'Phase 01 uses the inventory.* grants seeded since template v1 — no upgrade, nothing re-granted');
-  assert.ok(!Object.values(TEMPLATE_CHANGES).some((ns) => ns.includes('inventory') || ns.includes('shopping')));
+// P02 update (explained in V65-P02-REPORT §Tests): Phase 01 pinned "no template change"; Phase 02 adds exactly ONE grant,
+// inventory.adjust, via additive template v10. The stronger assertion: v10 is the ONLY template version touching inventory,
+// it adds only inventory.adjust (exact grant), Shopping still has none, and every Phase 01 default is unchanged.
+test('P01 permissions (updated for P02): only template v10 touches inventory, adding just inventory.adjust; Phase 01 defaults unchanged; no child access, delete (archive) admin only', () => {
+  assert.equal(ROLE_TEMPLATE_VERSION, 10, 'P02: v10 adds inventory.adjust');
+  assert.deepEqual(Object.entries(TEMPLATE_CHANGES).filter(([, ns]) => ns.includes('inventory')).map(([v]) => Number(v)), [10]);
+  assert.ok(!Object.values(TEMPLATE_CHANGES).some((ns) => ns.includes('shopping')));
   const roles = Object.fromEntries(defaultRoles().map((r) => [r.id, r.permissions]));
-  assert.deepEqual(['admin', 'member', 'viewer', 'child'].map((r) => roles[r].filter((p) => p.startsWith('inventory.'))),
+  assert.deepEqual(['admin', 'member', 'viewer', 'child'].map((r) => roles[r].filter((p) => p.startsWith('inventory.') && p !== 'inventory.adjust')),
     [['inventory.create', 'inventory.delete', 'inventory.edit', 'inventory.view'], ['inventory.create', 'inventory.edit', 'inventory.view'], ['inventory.view'], []]);
+  assert.deepEqual(['admin', 'member', 'viewer', 'child'].map((r) => roles[r].includes('inventory.adjust')), [true, true, false, false]);
   // a role at the current version keeps its customisation verbatim
   const custom = ['chef.view', 'inventory.view', 'shopping.view'];
   assert.deepEqual(upgradeRolePermissions({ current: custom, template: roles.child, from: ROLE_TEMPLATE_VERSION }), custom.sort());
@@ -164,7 +169,9 @@ test('P01 permissions: no role-template change (customised grants untouched); de
 
 const read = (p) => readFileSync(p, 'utf8');
 const filesIn = (dir) => readdirSync(dir).filter((f) => statSync(join(dir, f)).isFile()).map((f) => join(dir, f));
-test('P01 static: V6.5 files never touch Finance or money; Shopping still not started; stock is written only at creation; rules stay within the size budget', () => {
+// P02 update: "stock is written only at creation" became "stock fields are built ONLY by product-model (creation) and stock-model
+// (the stock mask)"; the rules check now targets the CATALOG branch of the update statement, which must still exclude stock fields.
+test('P01 static (updated for P02): V6.5 files never touch Finance or money; Shopping still not started; stock fields only in product-model / stock-model; catalog masks exclude stock; rules within budget', () => {
   const v65 = [...filesIn('src/modules/inventory'), ...filesIn('src/modules/shopping'), 'assets/css/modules/inventory.css'];
   for (const f of v65) {
     const c = read(f);
@@ -172,14 +179,18 @@ test('P01 static: V6.5 files never touch Finance or money; Shopping still not st
     assert.ok(!/\b(price|prices|amountMinor|currency|expenseId|expenses|walletId|wallet|totalMinor|estimatedPrice)\b/i.test(c), `${f} has money / expense fields`);
   }
   assert.deepEqual(readdirSync('src/modules/shopping'), ['module.js'], 'Shopping is not implemented in Phase 01');
-  for (const f of filesIn('src/modules/inventory').filter((x) => !x.endsWith('product-model.js'))) {
+  for (const f of filesIn('src/modules/inventory').filter((x) => !x.endsWith('product-model.js') && !x.endsWith('stock-model.js'))) {
     assert.ok(!/stockMilli\s*:|stockRev\s*:|presence\s*:/.test(read(f)), `${f} writes a stock field`);
   }
   assert.ok(!/mode:\s*'delete'|\.delete\(/.test(read('src/modules/inventory/inventory-repository.js')), 'no delete');
   const rules = read('firestore.rules');
   assert.ok(Buffer.byteLength(rules, 'utf8') <= 245000, `rules source ${Buffer.byteLength(rules, 'utf8')} bytes > 245,000 budget (hard limit 256 KB)`);
   const blk = rules.slice(rules.indexOf('match /pantryProducts/{productId}'), rules.indexOf('match /pantryProducts/{productId}') + 4000);
-  assert.ok(/allow delete: if false;/.test(blk) && /incoming\(\)\.stockRev == 0/.test(blk) && !/stockMilli', 'stockRev'|'stockRev', 'rev'/.test(blk.slice(blk.indexOf('allow update'))), 'stock fields not in any update mask');
+  assert.ok(/allow delete: if false;/.test(blk) && /incoming\(\)\.stockRev == 0/.test(blk), 'create pins zero / unrecorded stock; no delete');
+  const upd = blk.slice(blk.indexOf('allow update'), blk.indexOf('allow delete'));
+  const catalog = upd.slice(upd.indexOf('?'), upd.lastIndexOf(': pnStockWriteOk'));
+  assert.ok(/^allow update: if incoming\(\)\.stockRev == resource\.data\.stockRev\s*\?/.test(upd), 'branch selected by stockRev');
+  for (const m of catalog.matchAll(/hasOnly\(\[([^\]]*)\]\)/g)) assert.ok(!/stockMilli|presence|stockRev/.test(m[1]), `catalog mask has a stock field: ${m[1]}`);
 });
 
 test('P01 i18n: every Pantry key (incl. dynamic) exists in English and Arabic', () => {

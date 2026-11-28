@@ -52,4 +52,11 @@ window.__fake = {
   remove(path) { delete state.db[path]; persist(); notify(path); },
   /** V6.4.1 B: listeners on paths matching this regex (string) fail with 'unavailable'; null clears. Re-fires them. */
   failOn(re) { state.failOn = re || null; for (const ls of state.docListeners.values()) for (const fn of [...ls]) fn(); },
+  /** V6.5 P02: simulate losing / regaining the connection. Offline: listeners report fromCache, writes stay pending. */
+  setOffline(v) {
+    state.offline = !!v;
+    if (!v) { const ws = state.onlineWaiters || []; state.onlineWaiters = []; for (const w of ws) w(); }
+    for (const ls of state.docListeners.values()) for (const fn of [...ls]) fn();
+  },
+  pendingPaths: () => Object.keys(state.pending || {}),
 };

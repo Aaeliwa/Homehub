@@ -1,10 +1,11 @@
-/* Pantry catalog (V6.5 Phase 01). Theme tokens + logical properties only (RTL / dark safe); 320 px first. */
+/* Pantry catalog (V6.5 Phase 01) + stock (Phase 02). Theme tokens + logical properties only (RTL / dark safe); 320 px first. */
 .page--pantry { display: grid; gap: 0.9rem; min-inline-size: 0; }
-.pn-notice { margin: 0; }
 .pn-tools { display: grid; gap: 0.5rem; min-inline-size: 0; }
 .pn-search { inline-size: 100%; min-inline-size: 0; min-block-size: 44px; }
 /* category + location always share one row; each select truncates instead of overflowing */
 .pn-filters { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 0.5rem; min-inline-size: 0; }
+/* P02: the stock-status filter takes its own full row, so category + location stay side by side at 320 px */
+.pn-filter--wide { grid-column: 1 / -1; }
 .pn-filter { min-inline-size: 0; inline-size: 100%; min-block-size: 44px; text-overflow: ellipsis; white-space: nowrap; overflow: hidden; }
 @media (min-width: 760px) { .pn-tools { grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr); align-items: center; } }
 
@@ -16,7 +17,19 @@
 .pn-item__alt { font-size: 0.85rem; color: var(--muted); overflow-wrap: anywhere; }
 .pn-item__meta { display: flex; flex-wrap: wrap; gap: 0.3rem; align-items: center; font-size: 0.8rem; color: var(--text-2); }
 .pn-item__mode, .pn-item__min { overflow-wrap: anywhere; }
-.pn-item__stock { font-size: 0.78rem; color: var(--muted); font-style: italic; }
+.pn-item__stock { display: flex; flex-wrap: wrap; gap: 0.3rem; align-items: center; font-size: 0.8rem; min-inline-size: 0; }
+.pn-item__qty { font-weight: 800; color: var(--text); overflow-wrap: anywhere; }
+.pn-item__qty--unconfirmed { color: var(--muted); font-style: italic; }
+/* status pills: text always present (never colour alone); colours from theme tokens */
+.pn-st { display: inline-flex; align-items: center; min-block-size: 1.5rem; padding: 0.05rem 0.55rem; border-radius: var(--radius-pill); border: 1px solid var(--border);
+  background: var(--surface-2); color: var(--text-2); font-size: 0.76rem; font-weight: 700; line-height: 1.3; }
+.pn-st--unrecorded { font-style: italic; color: var(--muted); font-weight: 600; }
+.pn-st--in { background: var(--success-soft); border-color: var(--success-border); color: var(--success); }
+.pn-st--low { background: var(--warn-soft); border-color: var(--warn); color: var(--text); }
+.pn-st--out { background: var(--danger-soft); border-color: var(--danger-border); color: var(--danger); }
+.pn-st--pending, .pn-st--cached { background: var(--info-soft); border-color: var(--info-border); color: var(--text-2); border-style: dashed; }
+button.pn-st--unknown { cursor: pointer; min-block-size: 44px; background: var(--danger-soft); border-color: var(--danger-border); color: var(--danger); font: inherit; font-size: 0.8rem; font-weight: 800; }
+button.pn-st--unknown:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
 .pn-item__tools { flex: 0 0 auto; display: flex; flex-wrap: wrap; gap: 0.15rem; justify-content: flex-end; }
 .pn-item__tools .icon-btn { inline-size: 44px; block-size: 44px; }
 
@@ -24,3 +37,39 @@
 .pn-form__qty { display: grid; gap: 0.6rem; padding: 0.6rem; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-2); }
 .pn-form__qty[hidden] { display: none; }
 @media (max-width: 360px) { .pn-form__row { grid-template-columns: minmax(0, 1fr); } }
+
+/* P02 stock dialog */
+.pn-stock { display: grid; gap: 0.7rem; }
+.pn-stock__name { margin: 0; font-weight: 800; overflow-wrap: anywhere; }
+.pn-stock__current { margin: 0; overflow-wrap: anywhere; }
+.pn-stock__label { color: var(--text-2); }
+.pn-stock__amount { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: 0.6rem; }
+.pn-stock__preview { margin: 0; min-block-size: 1.4em; font-weight: 700; overflow-wrap: anywhere; }
+.pn-stock__preview--error { color: var(--danger); font-weight: 600; }
+.pn-seg { display: flex; flex-wrap: wrap; gap: 0.4rem; margin: 0; padding: 0; border: 0; min-inline-size: 0; }
+.pn-seg > legend { padding: 0; margin-block-end: 0.35rem; }
+.pn-seg__opt { position: relative; display: inline-flex; align-items: center; min-block-size: 44px; padding: 0 0.9rem; border: 1px solid var(--border-strong); border-radius: var(--radius-pill);
+  background: var(--surface); cursor: pointer; font-weight: 700; }
+.pn-seg__input { position: absolute; opacity: 0; inline-size: 1px; block-size: 1px; }
+.pn-seg__opt:has(.pn-seg__input:checked) { background: var(--surface-3); border-color: var(--text-2); box-shadow: inset 0 0 0 1px var(--text-2); }
+.pn-seg__opt:has(.pn-seg__input:focus-visible) { outline: 3px solid var(--focus); outline-offset: 2px; }
+.pn-seg__opt:has(.pn-seg__input:disabled) { opacity: 0.55; cursor: not-allowed; }
+@media (max-width: 360px) { .pn-stock__amount { grid-template-columns: minmax(0, 1fr); } }
+
+/* P02 history (read-only) */
+.pn-hist-wrap { display: grid; gap: 0.5rem; }
+.pn-hist { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.5rem; }
+.pn-hist__item { display: grid; gap: 0.25rem; padding: 0.55rem 0.7rem; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface); min-inline-size: 0; }
+.pn-hist__head { display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; }
+.pn-hist__numbers { font-weight: 800; overflow-wrap: anywhere; unicode-bidi: isolate; }
+.pn-hist__meta { display: flex; flex-wrap: wrap; gap: 0.25rem 0.7rem; font-size: 0.78rem; color: var(--text-2); }
+.pn-hist__note { margin: 0; font-size: 0.85rem; overflow-wrap: anywhere; }
+
+/* P02 review: unresolved / recovered stock operations + repeat confirmation */
+.pn-ops-wrap { display: grid; gap: 0.5rem; }
+.pn-ops { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; min-inline-size: 0; }
+.pn-ops > .banner { flex: 1 1 14rem; min-inline-size: 0; margin: 0; }
+.pn-stock__repeat { display: grid; gap: 0.4rem; }
+.pn-stock__repeat[hidden] { display: none; }
+.pn-stock__repeat-ok { display: inline-flex; align-items: center; gap: 0.5rem; min-block-size: 44px; font-weight: 700; cursor: pointer; }
+.pn-stock__repeat-ok input { inline-size: 1.25rem; block-size: 1.25rem; }

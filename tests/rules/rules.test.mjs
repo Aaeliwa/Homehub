@@ -20,7 +20,7 @@ async function assertDenied(p, why = '') {
 const assertFails = process.env.STRICT_DENIALS ? assertDenied : _assertFails;
 import { readFileSync } from 'node:fs';
 import { initializeTestEnvironment, assertSucceeds, assertFails as _assertFails } from '@firebase/rules-unit-testing';
-import { doc, getDoc, setDoc, updateDoc, deleteDoc, getDocs, collection, writeBatch, serverTimestamp, query, where } from 'firebase/firestore';
+import { doc, getDoc, setDoc, updateDoc, deleteDoc, getDocs, collection, writeBatch, serverTimestamp, query, where, orderBy, limit } from 'firebase/firestore';
 import { buildSetupWrites } from '../../src/core/home/setup-plan.js';
 import { defaultRoles } from '../../src/modules/index.js';
 
@@ -1087,14 +1087,14 @@ test('L2/L4/L13 a different user cannot read or adopt someone else\'s legacy hom
   await assertFails(adoptionBatch(OWNER_A, { homeId: 'hA' }), 'creator of hL cannot adopt a different home');
 });
 
-test('L3/L16/L17/L18 the stored creator adopts: own owner membership + five current roles; owner = ["*"], v9', async () => {
+test('L3/L16/L17/L18 the stored creator adopts: own owner membership + five current roles; owner = ["*"], v10', async () => {
   await legacyHome();
   await assertSucceeds(getDoc(doc(db(OWNER_A), 'homes', 'hL')), 'creator may read own legacy home (detection)');
   await assertSucceeds(getDoc(doc(db(OWNER_A), 'homes', 'hL', 'roles', 'owner')), 'per-id role check for detection');
   await assertFails(getDocs(collection(db(OWNER_A), 'homes', 'hL', 'roles')), 'but no list');
   await assertSucceeds(adoptionBatch(OWNER_A));
   const owner = await getDoc(doc(db(OWNER_A), 'homes', 'hL', 'roles', 'owner'));
-  assert.deepEqual([owner.data().permissions, owner.data().rank, owner.data().templateVersion], [['*'], 100, 9]);   // current template (v9: V6.4 B contacts)
+  assert.deepEqual([owner.data().permissions, owner.data().rank, owner.data().templateVersion], [['*'], 100, 10]);   // current template (v10: V6.5 P02 inventory.adjust; adoption must write the CURRENT version)
   for (const r of ['admin', 'member', 'viewer', 'child']) assert.ok((await getDoc(doc(db(OWNER_A), 'homes', 'hL', 'roles', r))).exists(), r);
   await assertSucceeds(getDoc(doc(db(OWNER_A), 'homes', 'hL', 'devices', 'd1')), 'now a normal owner (L20 path)');
 });
@@ -3064,4 +3064,268 @@ test('V65P01-4 pantry + customised roles: rules read the role document — a gra
   await assertDenied(pnUp(CHILD_A, 'pnMilk01', { nameEn: 'Child edit', rev: 2 }), 'view grant does not imply edit');
   await assertDenied(pnUp(MEMBER_WIFE, 'pnMilk01', { nameEn: 'Member edit', rev: 2 }), 'removed grant enforced for members');
   await assertSucceeds(setDoc(pnPath(db(MEMBER_WIFE), 'pnWife02'), pnDoc(MEMBER_WIFE, { nameEn: 'Bread', dimension: 'count', displayUnit: 'piece' })), 'other grants untouched');
+});
+
+// =================================================================== V6.5 PHASE 02 — Pantry stock + immutable movements
+// Every invariant is checked in BOTH directions: the product's stock branch needs a NEW movement at {pid}_s{stockRev}
+// (!exists before, existsAfter), and the movement needs the product before (get) and after (getAfter) with exactly one
+// stock revision between them. Adversarial pairs are built RAW (pnRaw) so the JS model never pre-filters them.
+import { planStock as pnPlan } from '../../src/modules/inventory/stock-model.js';
+const PN_OP = 'opRulesP02xxxxxxxxxxxxxx';
+const pnMv = (f, id, h = 'hA') => doc(f, 'homes', h, 'pantryMovements', id);
+async function pnGet(id, h = 'hA') {
+  let d = null;   // withSecurityRulesDisabled() resolves to undefined — capture inside the callback
+  await env.withSecurityRulesDisabled(async (c) => { const s = await getDoc(doc(c.firestore(), 'homes', h, 'pantryProducts', id)); d = s.exists() ? { id, ...s.data() } : null; });
+  return d;
+}
+const pnPlanFor = (u, p, intent) => pnPlan(p, intent, { uid: asUser(u, 'pnPlanFor').uid, now: serverTimestamp(), operationId: PN_OP, baseStockRev: p.stockRev });
+/** Raw (unvalidated) pair for adversarial cases. */
+function pnRaw(u, p, { type = 'add', after, presence = 'in', note = null } = {}) {
+  asUser(u, 'pnRaw');
+  const q = p.trackMode === 'quantity'; const a = q ? (after ?? p.stockMilli + 1000) : null; const rev = p.stockRev + 1;
+  return {
+    id: `${p.id}_s${rev}`, productId: p.id,
+    patch: q ? { stockMilli: a, stockRev: rev, updatedBy: u.uid, updatedAt: serverTimestamp() } : { presence, stockRev: rev, updatedBy: u.uid, updatedAt: serverTimestamp() },
+    movement: { productId: p.id, stockRev: rev, type: q ? type : 'presence', beforeMilli: q ? p.stockMilli : null, deltaMilli: q ? a - p.stockMilli : null, afterMilli: a,
+      requestedMilli: q ? Math.abs(a - p.stockMilli) : null, unfulfilledMilli: q ? 0 : null, note, ruleRev: null, segment: null, occFrom: null, occTo: null, coveredMilli: 0,
+      tripId: null, line: null, cookId: null, actorUid: u.uid, at: serverTimestamp(), schemaVersion: 1,
+      beforePresence: q ? null : (p.presence ?? null), afterPresence: q ? null : presence, dimension: q ? p.dimension : null, operationId: PN_OP },
+  };
+}
+/** Commit a pair as ONE batch (product update + movement create). Options tamper with either side. */
+function pnCommit(u, pair, { patchX = {}, movX = {}, movId, h = 'hA', noProduct = false, noMovement = false, extra } = {}) {
+  const f = db(u); const b = writeBatch(f);
+  if (!noProduct) b.update(pnPath(f, pair.productId || pair.movement.productId, h), { ...pair.patch, ...patchX });
+  if (!noMovement) b.set(pnMv(f, movId || pair.id, h), { ...pair.movement, ...movX });
+  if (extra) extra(b, f);
+  return b.commit();
+}
+async function pnStockHome() {
+  await pantryHome();
+  await assertSucceeds(setDoc(pnPath(db(OWNER_A), 'pnEggs01'), pnDoc(OWNER_A)), 'eggs: count, piece, min 6');
+  await assertSucceeds(setDoc(pnPath(db(OWNER_A), 'pnRice01'), pnDoc(OWNER_A, { nameEn: 'Rice', dimension: 'mass', displayUnit: 'kg', minQty: '1', aliases: '' })), 'rice: mass, kg');
+  await assertSucceeds(setDoc(pnPath(db(OWNER_A), 'pnSoap01'), pnDoc(OWNER_A, { nameEn: 'Soap', nameAr: '', trackMode: 'presence', minQty: '', aliases: '' })), 'soap: presence');
+}
+async function pnSetRole(roleId, edit) {
+  await env.withSecurityRulesDisabled(async (c) => {
+    const f = c.firestore();   // ONE instance per context (a second firestore() call after use throws)
+    const r = (await getDoc(doc(f, 'homes', 'hA', 'roles', roleId))).data();
+    await updateDoc(doc(f, 'homes', 'hA', 'roles', roleId), edit(r));
+  });
+}
+
+test('V65P02-1 stock happy paths: add / remove / correction / presence by owner, admin and member (template v10); first zero count; rev untouched; movements readable by inventory.view (incl. the bounded history query)', async () => {
+  await pnStockHome();
+  let p = await pnGet('pnEggs01');
+  await assertSucceeds(pnCommit(MEMBER_WIFE, pnPlanFor(MEMBER_WIFE, p, { type: 'add', amount: '12', unit: 'piece' })), 'member adds 12 to an unrecorded product');
+  p = await pnGet('pnEggs01');
+  await assertSucceeds(pnCommit(ADMIN_A, pnPlanFor(ADMIN_A, p, { type: 'remove', amount: '12', unit: 'piece', note: 'Party' })), 'admin removes to exactly zero');
+  p = await pnGet('pnEggs01');
+  await assertSucceeds(pnCommit(OWNER_A, pnPlanFor(OWNER_A, p, { type: 'correction', amount: '5', unit: 'piece', note: 'Counted' })), 'owner corrects (wildcard)');
+  p = await pnGet('pnEggs01');
+  await assertSucceeds(pnCommit(MEMBER_WIFE, pnPlanFor(MEMBER_WIFE, p, { type: 'correction', amount: '4', unit: 'piece', note: 'Recount' })), 'member corrects (inventory.adjust, v10 default)');
+  p = await pnGet('pnEggs01');
+  if (!(p.stockRev === 4 && p.rev === 1)) throw new Error(`stockRev / rev independent: got ${p.stockRev} / ${p.rev}`);
+  let r = await pnGet('pnRice01');
+  await assertSucceeds(pnCommit(OWNER_A, pnPlanFor(OWNER_A, r, { type: 'correction', amount: '0', unit: 'kg', note: 'Empty jar' })), 'explicit FIRST zero count (delta 0, stockRev 0)');
+  r = await pnGet('pnRice01');
+  await assertSucceeds(pnCommit(OWNER_A, pnPlanFor(OWNER_A, r, { type: 'add', amount: '250', unit: 'g' })), 'same-dimension unit (g on kg)');
+  const s = await pnGet('pnSoap01');
+  await assertSucceeds(pnCommit(MEMBER_WIFE, pnPlanFor(MEMBER_WIFE, s, { type: 'presence', state: 'low' })), 'presence: unrecorded → low');
+  for (const u of [OWNER_A, ADMIN_A, MEMBER_WIFE, VIEWER_A]) {
+    await assertSucceeds(getDoc(pnMv(db(u), 'pnEggs01_s1')), `${u.uid} reads a movement`);
+    await assertSucceeds(getDocs(query(collection(db(u), 'homes', 'hA', 'pantryMovements'), where('productId', '==', 'pnEggs01'), orderBy('stockRev', 'desc'), limit(50))), `${u.uid}: bounded history query`);
+  }
+  await assertDenied(getDoc(pnMv(db(CHILD_A), 'pnEggs01_s1')), 'child: no inventory.view');
+  await assertDenied(getDoc(pnMv(anon(), 'pnEggs01_s1')), 'unauthenticated');
+  await assertDenied(getDoc(pnMv(db(MALLORY), 'pnEggs01_s1')), 'non-member');
+  await assertDenied(getDocs(query(collection(db(OWNER_HOME_B), 'homes', 'hA', 'pantryMovements'), where('productId', '==', 'pnEggs01'), orderBy('stockRev', 'desc'), limit(50))), 'other Home');
+});
+
+test('V65P02-2 product side: standalone stock update, mixed metadata + stock, rev bump, skipped / repeated stockRev, stock without stockRev, spoofed stamps, archived product, create + stock bypass, wrong-mode stock — all denied', async () => {
+  await pnStockHome();
+  const p = await pnGet('pnEggs01'); const pair = pnRaw(OWNER_A, p);
+  await assertDenied(pnCommit(OWNER_A, pair, { noMovement: true }), 'standalone product stock update (no movement)');
+  await assertDenied(pnCommit(OWNER_A, pair, { patchX: { nameEn: 'Sneaky' } }), 'mixed metadata + stock');
+  await assertDenied(pnCommit(OWNER_A, pair, { patchX: { minMilli: 1000 } }), 'mixed threshold + stock');
+  await assertDenied(pnCommit(OWNER_A, pair, { patchX: { rev: 2 } }), 'stock write must not bump rev');
+  await assertDenied(pnCommit(OWNER_A, pair, { patchX: { stockRev: 2 }, movX: { stockRev: 2 }, movId: 'pnEggs01_s2' }), 'stockRev skips a revision');
+  await assertDenied(pnCommit(OWNER_A, pair, { patchX: { stockRev: 0 }, movX: { stockRev: 0 }, movId: 'pnEggs01_s0' }), 'stockRev unchanged');
+  await assertDenied(updateDoc(pnPath(db(OWNER_A), 'pnEggs01'), { stockMilli: 5000, rev: 2, updatedBy: OWNER_A.uid, updatedAt: serverTimestamp() }), 'stock via the catalog branch (rev + 1)');
+  await assertDenied(updateDoc(pnPath(db(OWNER_A), 'pnEggs01'), { stockMilli: 5000, updatedBy: OWNER_A.uid, updatedAt: serverTimestamp() }), 'stockMilli without stockRev');
+  await assertDenied(pnCommit(OWNER_A, pair, { patchX: { updatedBy: ADMIN_A.uid } }), 'updatedBy spoof');
+  await assertDenied(pnCommit(OWNER_A, pair, { patchX: { updatedAt: new Date('2020-01-01') } }), 'client updatedAt');
+  await assertDenied(pnCommit(OWNER_A, pair, { patchX: { presence: 'in' } }), 'quantity product with presence');
+  await assertDenied(pnCommit(OWNER_A, pnRaw(OWNER_A, p, { after: 1500 })), 'fractional pieces stock');
+  await assertDenied(pnCommit(OWNER_A, pnRaw(OWNER_A, p, { after: 1000000000001000 })), 'stock above 10^12');
+  const soap = await pnGet('pnSoap01');
+  await assertDenied(pnCommit(OWNER_A, pnRaw(OWNER_A, soap), { patchX: { stockMilli: 1000 } }), 'presence product with numeric stock');
+  // archived product: stock frozen
+  await assertSucceeds(pnUp(ADMIN_A, 'pnEggs01', { archived: true, archivedAt: serverTimestamp(), archivedBy: ADMIN_A.uid, rev: 2 }), 'archive');
+  const arc = await pnGet('pnEggs01');
+  await assertDenied(pnCommit(OWNER_A, pnRaw(OWNER_A, arc)), 'archived product: no stock change');
+  // create + stock bypass: a NEW product in the same batch as its first movement
+  await assertDenied(pnCommit(OWNER_A, { id: 'pnNew0001_s1', productId: 'pnNew0001', patch: {}, movement: pnRaw(OWNER_A, { ...p, id: 'pnNew0001', stockRev: 0, stockMilli: 0 }).movement }, {
+    noProduct: true, extra: (b, f) => b.set(pnPath(f, 'pnNew0001'), pnDoc(OWNER_A, { nameEn: 'New' }, { stockMilli: 1000, stockRev: 1 })) }), 'create with stock + movement');
+  await assertDenied(pnCommit(OWNER_A, { id: 'pnNew0002_s1', productId: 'pnNew0002', patch: {}, movement: pnRaw(OWNER_A, { ...p, id: 'pnNew0002', stockRev: 0, stockMilli: 0 }).movement }, {
+    noProduct: true, extra: (b, f) => b.set(pnPath(f, 'pnNew0002'), pnDoc(OWNER_A, { nameEn: 'New' })) }), 'valid create + a movement claiming stockRev 1');
+});
+
+test('V65P02-3 movement side: standalone, wrong / malformed id, wrong product, key set, future types and provenance, arithmetic, bounds, overdraft, reasons, no-ops, presence fields, dimension, spoofed actor / time, schema, operationId — all denied', async () => {
+  await pnStockHome();
+  await env.withSecurityRulesDisabled(async (c) => { await updateDoc(doc(c.firestore(), 'homes', 'hA', 'pantryProducts', 'pnEggs01'), { stockMilli: 6000, stockRev: 1 }); });
+  const p = await pnGet('pnEggs01'); const pair = pnRaw(OWNER_A, p);   // add 1 piece: 6000 → 7000, stockRev 2
+  await assertDenied(pnCommit(OWNER_A, pair, { noProduct: true }), 'standalone movement');
+  await assertDenied(pnCommit(OWNER_A, pair, { movId: 'pnEggs01_s9' }), 'wrong deterministic id (revision)');
+  await assertDenied(pnCommit(OWNER_A, pair, { movId: 'pnRice01_s2' }), 'wrong deterministic id (product)');
+  await assertDenied(pnCommit(OWNER_A, pair, { movId: 'pnEggs01-s2' }), 'malformed id');
+  await assertDenied(pnCommit(OWNER_A, pair, { movX: { productId: 'pnRice01' }, movId: 'pnRice01_s2' }), 'movement for another product');
+  const { operationId, ...noOp } = pair.movement; void operationId;
+  await assertDenied(pnCommit(OWNER_A, { ...pair, movement: noOp }), 'missing key');
+  for (const [x, why] of [
+    [{ price: 1 }, 'unknown key'], [{ type: 'consumption' }, 'future type consumption'], [{ type: 'purchase' }, 'future type purchase'], [{ type: 'cook' }, 'future type cook'], [{ type: 'initial' }, 'deferred type initial'],
+    [{ coveredMilli: 1000 }, 'coveredMilli not neutral'], [{ ruleRev: 1 }, 'ruleRev'], [{ segment: 's' }, 'segment'], [{ occFrom: 1 }, 'occFrom'], [{ occTo: 1 }, 'occTo'], [{ tripId: 't1' }, 'tripId'], [{ line: 1 }, 'line'], [{ cookId: 'c1' }, 'cookId'],
+    [{ deltaMilli: 2000 }, 'delta ≠ after − before'], [{ beforeMilli: 5000, deltaMilli: 2000 }, 'before ≠ stored stock'], [{ afterMilli: 8000, deltaMilli: 2000 }, 'after ≠ product after'],
+    [{ requestedMilli: 500 }, 'requested ≠ |delta|'], [{ unfulfilledMilli: 1000 }, 'unfulfilled ≠ 0'], [{ type: 'remove' }, 'remove with a positive delta'],
+    [{ beforePresence: 'in' }, 'quantity movement with presence'], [{ dimension: 'mass' }, 'dimension mismatch'], [{ dimension: null }, 'dimension missing'],
+    [{ actorUid: ADMIN_A.uid }, 'actor spoof'], [{ at: new Date('2020-01-01') }, 'client timestamp'], [{ schemaVersion: 2 }, 'schema version'],
+    [{ operationId: 'short' }, 'operationId too short'], [{ operationId: 'x'.repeat(65) }, 'operationId too long'], [{ operationId: 'has space xxxxxxxxxxxx' }, 'operationId charset'],
+    [{ note: '   ' }, 'blank optional note'], [{ note: 'x'.repeat(201) }, 'note too long'], [{ stockRev: 1 }, 'movement stockRev ≠ product after'],
+  ]) await assertDenied(pnCommit(OWNER_A, pair, { movX: x }), why);
+  await assertDenied(pnCommit(OWNER_A, pnRaw(OWNER_A, p, { after: 6000 })), 'add with delta 0');
+  await assertDenied(pnCommit(OWNER_A, pnRaw(OWNER_A, p, { after: 6000 + 1000001000 })), 'add above 10^9 per operation');
+  await assertDenied(pnCommit(OWNER_A, pnRaw(OWNER_A, p, { type: 'remove', after: -1000 })), 'remove into negative (overdraft)');
+  await assertDenied(pnCommit(OWNER_A, pnRaw(OWNER_A, p, { type: 'remove', after: 7000 })), 'remove that adds');
+  await assertDenied(pnCommit(OWNER_A, pnRaw(OWNER_A, p, { type: 'correction', after: 3000 })), 'correction without a reason');
+  await assertDenied(pnCommit(OWNER_A, pnRaw(OWNER_A, p, { type: 'correction', after: 3000, note: '  ' })), 'correction with a blank reason');
+  await assertDenied(pnCommit(OWNER_A, pnRaw(OWNER_A, p, { type: 'correction', after: 6000, note: 'same' })), 'correction no-op on recorded stock');
+  await assertSucceeds(pnCommit(OWNER_A, pnRaw(OWNER_A, p, { type: 'correction', after: 3000, note: 'Counted' })), 'control: a valid correction passes');
+  const soap = await pnGet('pnSoap01'); const sp = pnRaw(OWNER_A, soap, { presence: 'out' });
+  await assertDenied(pnCommit(OWNER_A, pnRaw(OWNER_A, soap, { presence: null })), 'presence must become in / low / out');
+  await assertDenied(pnCommit(OWNER_A, sp, { movX: { beforePresence: 'in' } }), 'beforePresence ≠ stored');
+  await assertDenied(pnCommit(OWNER_A, sp, { movX: { afterPresence: 'low' } }), 'afterPresence ≠ product after');
+  await assertDenied(pnCommit(OWNER_A, sp, { movX: { beforeMilli: 0, afterMilli: 0, deltaMilli: 0, requestedMilli: 0, unfulfilledMilli: 0 } }), 'presence movement with numbers');
+  await assertDenied(pnCommit(OWNER_A, sp, { movX: { coveredMilli: null } }), 'presence: coveredMilli neutral is 0');
+  await assertDenied(pnCommit(OWNER_A, sp, { movX: { dimension: 'count' } }), 'presence movement with a dimension');
+  await assertDenied(pnCommit(OWNER_A, sp, { movX: { type: 'add' } }), 'presence product + quantity type');
+  await assertSucceeds(pnCommit(OWNER_A, sp), 'control: presence unrecorded → out');
+  const soap2 = await pnGet('pnSoap01');
+  await assertDenied(pnCommit(OWNER_A, pnRaw(OWNER_A, soap2, { presence: 'out' })), 'presence same-state no-op');
+});
+
+test('V65P02-4 immutability + replay: movements are never updated or deleted (even by the owner); replayed / reused / duplicate revisions refused; two movements for one revision refused; cross-home writes refused', async () => {
+  await pnStockHome();
+  let p = await pnGet('pnEggs01');
+  const first = pnPlanFor(OWNER_A, p, { type: 'add', amount: '3', unit: 'piece' });
+  await assertSucceeds(pnCommit(OWNER_A, first));
+  for (const u of [OWNER_A, ADMIN_A, MEMBER_WIFE]) {
+    await assertDenied(updateDoc(pnMv(db(u), 'pnEggs01_s1'), { note: 'edited' }), `${u.uid} cannot update a movement`);
+    await assertDenied(deleteDoc(pnMv(db(u), 'pnEggs01_s1')), `${u.uid} cannot delete a movement`);
+  }
+  await assertDenied(setDoc(pnMv(db(OWNER_A), 'pnEggs01_s1'), { ...first.movement, note: 'overwrite' }), 'overwrite (set) an existing movement');
+  await assertDenied(pnCommit(OWNER_A, first), 'replay of the exact same batch');
+  // pre-existing movement at the next id (planted with rules disabled) cannot be reused by a stock write
+  p = await pnGet('pnEggs01'); const next = pnRaw(OWNER_A, p);
+  await env.withSecurityRulesDisabled(async (c) => { await setDoc(doc(c.firestore(), 'homes', 'hA', 'pantryMovements', next.id), { ...next.movement, at: new Date() }); });
+  await assertDenied(pnCommit(OWNER_A, next, { noMovement: true }), 'reuse of a pre-existing movement (!exists before)');
+  await assertDenied(pnCommit(OWNER_A, next), 'write over a pre-existing movement');
+  // two movements for one revision (the extra one claims the following revision)
+  const r = await pnGet('pnRice01'); const rp = pnRaw(OWNER_A, r, { after: 1000000 });
+  await assertDenied(pnCommit(OWNER_A, rp, { extra: (b, f) => b.set(pnMv(f, 'pnRice01_s2'), { ...rp.movement, stockRev: 2, beforeMilli: 1000000, deltaMilli: 1000000, afterMilli: 2000000, requestedMilli: 1000000 }) }), 'second movement in the same batch');
+  // cross-home: a member of hB (owner) cannot write hA stock; hA's owner cannot write a movement into hB for an hA product
+  const e = await pnGet('pnEggs01');
+  await assertDenied(pnCommit(OWNER_HOME_B, pnRaw(OWNER_HOME_B, e)), 'other Home owner writes hA stock');
+  await assertDenied(pnCommit(OWNER_A, pnRaw(OWNER_A, e), { h: 'hB' }), 'hA product path in hB');
+  await assertDenied(pnCommit(MALLORY, pnRaw(MALLORY, e)), 'non-member');
+});
+
+test('V65P02-5 permissions: viewer / child / outsider denied; correction needs inventory.adjust (never falls back to edit); stock needs inventory.view too; custom grants respected; revocation enforced; template v9 roles have no adjust', async () => {
+  await pnStockHome();
+  let p = await pnGet('pnEggs01');
+  for (const u of [VIEWER_A, CHILD_A, MALLORY]) {
+    await assertDenied(pnCommit(u, pnRaw(u, p)), `${u.uid}: add denied`);
+    await assertDenied(pnCommit(u, pnRaw(u, p, { type: 'correction', after: 0, note: 'x' })), `${u.uid}: correction denied`);
+  }
+  await assertDenied(pnCommit(ADMIN_A, pnRaw(ADMIN_A, p), { patchX: { updatedBy: OWNER_A.uid }, movX: { actorUid: OWNER_A.uid } }), 'admin forging the owner');
+  // member role at template v9 (no inventory.adjust): add yes, correction no
+  await pnSetRole('member', (r) => ({ permissions: r.permissions.filter((x) => x !== 'inventory.adjust'), templateVersion: 9 }));
+  await assertDenied(pnCommit(MEMBER_WIFE, pnRaw(MEMBER_WIFE, p, { type: 'correction', after: 2000, note: 'Count' })), 'v9 member: no correction (edit does not imply adjust)');
+  await assertSucceeds(pnCommit(MEMBER_WIFE, pnPlanFor(MEMBER_WIFE, p, { type: 'add', amount: '2', unit: 'piece' })), 'v9 member: add still works');
+  // owner upgrades the role (the rules accept the additive v10 role update)
+  const { upgradeRolePermissions: up } = await import('../../src/core/permissions/roles.js');
+  let cur = null; await env.withSecurityRulesDisabled(async (c) => { cur = (await getDoc(doc(c.firestore(), 'homes', 'hA', 'roles', 'member'))).data(); });
+  const tpl = defaultRoles().find((r) => r.id === 'member').permissions;
+  await assertSucceeds(updateDoc(doc(db(OWNER_A), 'homes', 'hA', 'roles', 'member'), { permissions: up({ current: cur.permissions, template: tpl, from: 9 }), templateVersion: 10, updatedAt: serverTimestamp() }), 'owner-triggered v10 upgrade');
+  p = await pnGet('pnEggs01');
+  await assertSucceeds(pnCommit(MEMBER_WIFE, pnPlanFor(MEMBER_WIFE, p, { type: 'correction', amount: '1', unit: 'piece', note: 'Recount' })), 'after the upgrade: correction');
+  // custom grants: child with inventory.view + inventory.adjust may correct but not add
+  await pnSetRole('child', (r) => ({ permissions: [...r.permissions, 'inventory.view', 'inventory.adjust'] }));
+  p = await pnGet('pnEggs01');
+  await assertDenied(pnCommit(CHILD_A, pnRaw(CHILD_A, p)), 'custom child: add needs inventory.edit');
+  await assertSucceeds(pnCommit(CHILD_A, pnRaw(CHILD_A, p, { type: 'correction', after: 4000, note: 'Kid counted' })), 'custom child: correction with view + adjust');
+  // inventory.edit + adjust WITHOUT inventory.view → no blind stock writes
+  await pnSetRole('member', (r) => ({ permissions: r.permissions.filter((x) => x !== 'inventory.view') }));
+  p = await pnGet('pnEggs01');
+  await assertDenied(pnCommit(MEMBER_WIFE, pnRaw(MEMBER_WIFE, p)), 'no inventory.view → no add');
+  await assertDenied(pnCommit(MEMBER_WIFE, pnRaw(MEMBER_WIFE, p, { type: 'correction', after: 1000, note: 'x' })), 'no inventory.view → no correction');
+  // revocation of adjust after the upgrade (owner edits the role again) is enforced
+  await pnSetRole('member', (r) => ({ permissions: [...r.permissions, 'inventory.view'].filter((x) => x !== 'inventory.adjust') }));
+  await assertDenied(pnCommit(MEMBER_WIFE, pnRaw(MEMBER_WIFE, p, { type: 'correction', after: 1000, note: 'x' })), 'revoked adjust');
+  await assertSucceeds(pnCommit(MEMBER_WIFE, pnRaw(MEMBER_WIFE, p, { type: 'remove', after: 3000 })), 'edit still works');
+  // a suspended member loses everything
+  await env.withSecurityRulesDisabled(async (c) => { await updateDoc(doc(c.firestore(), 'homes', 'hA', 'members', ADMIN_A.uid), { status: 'suspended' }); });
+  const q = await pnGet('pnEggs01');
+  await assertDenied(pnCommit(ADMIN_A, pnRaw(ADMIN_A, q)), 'suspended admin');
+});
+
+test('V65P02-6 concurrency + races: two writers on one stockRev (second refused), stale plan, archive race, dimension race, catalog edits and stock writes do not block each other, dimension stays locked when the balance returns to zero', async () => {
+  await pnStockHome();
+  const p = await pnGet('pnEggs01');
+  const a = pnPlanFor(OWNER_A, p, { type: 'add', amount: '2', unit: 'piece' });
+  const b = pnPlanFor(MEMBER_WIFE, p, { type: 'add', amount: '5', unit: 'piece' });
+  await assertSucceeds(pnCommit(OWNER_A, a), 'first writer');
+  await assertDenied(pnCommit(MEMBER_WIFE, b), 'second writer on the same stockRev (movement exists, product moved on)');
+  // stale plan: built on stockRev 1, product now at 2
+  const p1 = await pnGet('pnEggs01'); const stale = pnRaw(OWNER_A, p1);
+  await assertSucceeds(pnCommit(ADMIN_A, pnRaw(ADMIN_A, p1, { after: 9000 })));
+  await assertDenied(pnCommit(OWNER_A, stale), 'stale plan refused (never rebased)');
+  // catalog edit and stock write are independent: stock does not bump rev, so a catalog edit at rev + 1 still lands
+  const p2 = await pnGet('pnEggs01');
+  await assertSucceeds(pnUp(MEMBER_WIFE, 'pnEggs01', { nameEn: 'Brown eggs', rev: p2.rev + 1 }), 'catalog edit after stock writes');
+  const p3 = await pnGet('pnEggs01');
+  await assertSucceeds(pnCommit(MEMBER_WIFE, pnRaw(MEMBER_WIFE, p3, { type: 'remove', after: 0 })), 'stock write after a catalog edit (balance back to zero)');
+  await assertDenied(pnUp(OWNER_A, 'pnEggs01', { dimension: 'mass', displayUnit: 'g', minMilli: null, rev: p3.rev + 1 }), 'dimension locked after a movement even at balance 0');
+  // dimension race: stock prepared for count while a catalog edit (stockRev 0) switched the product to mass
+  await assertSucceeds(setDoc(pnPath(db(OWNER_A), 'pnFlour1'), pnDoc(OWNER_A, { nameEn: 'Flour', dimension: 'count', displayUnit: 'piece', minQty: '', aliases: '' })));
+  const fl = await pnGet('pnFlour1'); const flPlan = pnRaw(OWNER_A, fl);
+  await assertSucceeds(pnUp(OWNER_A, 'pnFlour1', { dimension: 'mass', displayUnit: 'g', rev: 2 }), 'dimension change while unrecorded');
+  await assertDenied(pnCommit(OWNER_A, flPlan, { patchX: {} }), 'count movement on a product that is now mass');
+  // archive race
+  const e = await pnGet('pnRice01'); const ePlan = pnRaw(OWNER_A, e);
+  await assertSucceeds(pnUp(ADMIN_A, 'pnRice01', { archived: true, archivedAt: serverTimestamp(), archivedBy: ADMIN_A.uid, rev: e.rev + 1 }));
+  await assertDenied(pnCommit(OWNER_A, ePlan, { patchX: {} }), 'stock write after archive');
+  // restore: stock writes allowed again from the stored stockRev
+  await assertSucceeds(pnUp(OWNER_A, 'pnRice01', { archived: false, archivedAt: null, archivedBy: null, rev: e.rev + 2 }));
+  const e2 = await pnGet('pnRice01');
+  await assertSucceeds(pnCommit(OWNER_A, pnRaw(OWNER_A, e2)), 'restored product: stock writes resume');
+  // archive + stock in ONE batch is a mixed write → refused
+  const e3 = await pnGet('pnRice01'); const e3p = pnRaw(OWNER_A, e3);
+  await assertDenied(pnCommit(OWNER_A, e3p, { patchX: { archived: true, archivedAt: serverTimestamp(), archivedBy: OWNER_A.uid } }), 'archive + stock mixed');
+});
+
+// Review finding R3: "one product per batch" is an APPLICATION constraint of the client (inventory-repository.commitStock
+// builds exactly one pair). It is NOT a security invariant: the rules validate EVERY product / movement pair on its own,
+// so a batch of several valid pairs is allowed and a batch with any invalid pair is refused as a whole.
+test('V65P02-7 multi-product batch: two independently valid pairs pass; one invalid pair rejects the whole batch (nothing applied)', async () => {
+  await pnStockHome();
+  const e = await pnGet('pnEggs01'); const r = await pnGet('pnRice01');
+  const pe = pnPlanFor(OWNER_A, e, { type: 'add', amount: '2', unit: 'piece' });
+  const pr = pnPlanFor(OWNER_A, r, { type: 'add', amount: '1', unit: 'kg' });
+  await assertSucceeds(pnCommit(OWNER_A, pe, { extra: (b, f) => { b.update(pnPath(f, 'pnRice01'), pr.patch); b.set(pnMv(f, pr.id), pr.movement); } }), 'two valid pairs in one batch');
+  const e2 = await pnGet('pnEggs01'); const r2 = await pnGet('pnRice01');
+  if (!(e2.stockRev === 1 && r2.stockRev === 1)) throw new Error('both pairs applied');
+  const good = pnPlanFor(OWNER_A, e2, { type: 'add', amount: '1', unit: 'piece' });
+  const bad = pnRaw(OWNER_A, r2, { after: r2.stockMilli + 1000 });
+  await assertDenied(pnCommit(OWNER_A, good, { extra: (b, f) => { b.update(pnPath(f, 'pnRice01'), bad.patch); b.set(pnMv(f, bad.id), { ...bad.movement, coveredMilli: 5 }); } }), 'one invalid pair → whole batch refused');
+  await assertDenied(pnCommit(OWNER_A, good, { extra: (b, f) => b.update(pnPath(f, 'pnRice01'), { ...bad.patch }) }), 'valid pair + an unproven stock update for another product');
 });

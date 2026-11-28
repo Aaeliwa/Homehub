@@ -321,7 +321,7 @@ Each module adds its collections under its home, and its rules, in its own phase
 | Cleaning | `homes/{h}/cleaningTasks/{id}`, `homes/{h}/cleaningLog/{id}` | `cleaning.*` |
 | Maintenance | `homes/{h}/maintenance/{id}` | `maintenance.*` |
 | Contacts | `homes/{h}/contacts/{id}` | `contacts.*` |
-| Inventory (Pantry) | `homes/{h}/pantryProducts/{id}` (V6.5 Phase 01: catalog) | `inventory.*` |
+| Inventory (Pantry) | `homes/{h}/pantryProducts/{id}` (V6.5 Phase 01: catalog; Phase 02: stock branch) · `homes/{h}/pantryMovements/{productId}_s{stockRev}` (Phase 02, immutable) | `inventory.*` (correction: `inventory.adjust`) |
 | Shopping | `homes/{h}/shoppingItems/{id}` | `shopping.*` |
 
 Exact names are decided in each module's phase and recorded here.
@@ -581,3 +581,37 @@ New collection; no migration; no existing collection changed. Id: `^[A-Za-z0-9_-
 | `createdBy`, `createdAt`, `updatedBy`, `updatedAt`, `schemaVersion: 1` | | server timestamps, caller uid |
 
 Reads: one bounded listener `archived == false` (limit 501, truncation notice above 500); archived list on demand (limit 201). No composite index. No delete (`allow delete: if false`). Phase 02 adds a separate stock branch (stock fields + `stockRev` only, proven against an immutable movement); catalog edits never touch stock fields (update masks).
+
+### V6.5 Phase 02: Pantry stock — product stock branch + `homes/{h}/pantryMovements/{productId}_s{stockRev}`
+
+**Product stock branch** (same update statement, selected when `stockRev` changes): mask `stockMilli` (quantity) or `presence`
+(presence), `stockRev` (= stored + 1), `updatedBy` (caller), `updatedAt` (server time). `rev` and every catalog field unchanged;
+product active before and after; `pnContentOk`; the movement at `{productId}_s{new stockRev}` must NOT exist before and MUST exist
+after this batch, and must link exactly to the product before / after. Stock semantics: a quantity product with `stockRev 0` is
+**not recorded yet** (its stored 0 is not "verified empty"); presence `null` is not recorded yet. Phase 01 documents are read as stored.
+The dimension stays locked once `stockRev > 0`, even at balance 0. No initial-stock-on-create: creation keeps zero / unrecorded stock.
+
+**Movement** — immutable (create only; no update / delete for anyone). Exactly these 24 keys:
+
+| Field | Quantity movement (add / remove / correction) | Presence movement |
+|---|---|---|
+| `productId` | string, product id (`^[A-Za-z0-9_-]{6,40}$`); doc id = `productId + '_s' + stockRev` | same |
+| `stockRev` | int ≥ 1 = product's new stockRev | same |
+| `type` | `add` / `remove` / `correction` | `presence` |
+| `beforeMilli`, `afterMilli` | int, 0 … 10^12, whole pieces for count; = product before / after | null |
+| `deltaMilli` | int = after − before; add: 1 … 10^9; remove: −10^9 … −1; correction: any (0 only for the first count) | null |
+| `requestedMilli` | int = \|delta\| | null |
+| `unfulfilledMilli` | int 0 (no clipping in Phase 02) | null |
+| `note` | correction: required, 1–200 chars (trimmed non-blank); add / remove: null or 1–200 | null or 1–200 |
+| `beforePresence` | null | null (unrecorded) / in / low / out = product before |
+| `afterPresence` | null | in / low / out = product after; ≠ before |
+| `dimension` | count / mass / volume = product's (historical dimension) | null |
+| `operationId` | string `^[A-Za-z0-9_-]{16,64}$` (client random; retry reconciliation only) | same |
+| `ruleRev`, `segment`, `occFrom`, `occTo`, `tripId`, `line`, `cookId` | null (future consumption / purchase / cook provenance) | null |
+| `coveredMilli` | 0 (future; neutral value from Phase 00 D.2) | 0 |
+| `actorUid` | caller uid | same |
+| `at` | server time (`request.time`) | same |
+| `schemaVersion` | 1 | 1 |
+
+Future types (`consumption`, `purchase`, `cook`, `initial`) are refused. **Index:** `pantryMovements` collection scope,
+`productId ASC, stockRev DESC` — query `productId ==`, `orderBy(stockRev, desc)`, `limit(50)` ("recent history"). No listener on movements.

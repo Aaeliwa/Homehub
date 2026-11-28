@@ -79,9 +79,21 @@ test('no Admin SDK or service-account material anywhere', () => {
   assert.deepEqual(grep(files, /firebase-admin|private_key|service_account|serviceAccount/), []);
 });
 
-test('browser storage limited to preference cache and debug flag', () => {
+// V6.5 P02 (review finding "uncertain operation recovery across reload"): ONE more, narrowly scoped user — the Pantry
+// pending-stock-operation registry. It is pinned below: one fixed key prefix, localStorage only, every access guarded.
+test('browser storage limited to preference cache, debug flag and the Pantry pending-operation registry', () => {
   const users = grepCode(SRC, /localStorage|sessionStorage/).sort();
-  assert.deepEqual(users, [join('src', 'boot-prefs.js'), join('src', 'core', 'settings', 'preferences.js'), join('src', 'core', 'utils', 'logger.js')].sort());
+  assert.deepEqual(users, [join('src', 'boot-prefs.js'), join('src', 'core', 'settings', 'preferences.js'), join('src', 'core', 'utils', 'logger.js'),
+    join('src', 'modules', 'inventory', 'pending-ops.js')].sort());
+  const reg = code(join('src', 'modules', 'inventory', 'pending-ops.js'));
+  assert.ok(!/sessionStorage|indexedDB/.test(reg), 'registry: localStorage only');
+  assert.equal((reg.match(/globalThis\.localStorage/g) || []).length, 1, 'registry: one guarded storage handle');
+  assert.match(reg, /const PREFIX = 'homehub\.pantry\.pendingStock\.v1';/);
+  for (const m of reg.matchAll(/store\.(getItem|setItem|removeItem)\(/g)) {
+    const before = reg.slice(Math.max(0, m.index - 120), m.index);
+    assert.ok(/try \{[^}]*$/.test(before), `registry: ${m[1]} inside try`);
+  }
+  assert.ok(!/token|password|apiKey|idToken/i.test(reg), 'registry: no credentials');
 });
 
 test('every relative import resolves to a file', () => {

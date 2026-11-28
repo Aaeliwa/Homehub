@@ -2725,7 +2725,7 @@ await check('L1–L3 legacy home: creator signs in → specific upgrade screen (
   assert.ok(!Object.keys(d).some((k) => k.startsWith(`homes/${LEGACY}/members/`) || k.startsWith(`homes/${LEGACY}/roles/`)), 'detection wrote nothing');
 });
 
-await check('L4 upgrade → automatic re-resolution to the SAME home: owner membership + five v9 roles, data untouched', async () => {
+await check('L4 upgrade → automatic re-resolution to the SAME home: owner membership + five v10 roles, data untouched', async () => {
   await page.click('#legacy-upgrade');
   await page.locator('.hero__home').waitFor();
   assert.match(await page.locator('.hero__home').innerText(), /Old Adel Home/);
@@ -2733,7 +2733,7 @@ await check('L4 upgrade → automatic re-resolution to the SAME home: owner memb
   const m = d[`homes/${LEGACY}/members/UID_OWNER`];
   assert.deepEqual([m.roleId, m.status, m.legacyAdoption, m.addedBy], ['owner', 'active', true, 'UID_OWNER']);
   assert.deepEqual(Object.keys(d).filter((k) => k.startsWith(`homes/${LEGACY}/roles/`)).map((k) => k.split('/').pop()).sort(), ['admin', 'child', 'member', 'owner', 'viewer']);
-  assert.deepEqual([d[`homes/${LEGACY}/roles/owner`].permissions, d[`homes/${LEGACY}/roles/owner`].rank, d[`homes/${LEGACY}/roles/owner`].templateVersion], [['*'], 100, 9]);   // current template v9 (V6.4 B contacts)
+  assert.deepEqual([d[`homes/${LEGACY}/roles/owner`].permissions, d[`homes/${LEGACY}/roles/owner`].rank, d[`homes/${LEGACY}/roles/owner`].templateVersion], [['*'], 100, 10]);   // current template v10 (V6.5 P02 inventory.adjust): adoption writes the CURRENT version
   assert.equal(d['users/UID_OWNER'].defaultHomeId, LEGACY, 'defaultHomeId unchanged');
   assert.equal(await legacyBusiness(LEGACY), globalThis.__legacyBefore, 'home doc + devices + expenses + savings byte-identical');
   assert.equal(Object.keys(d).filter((k) => /^homes\/[^/]+$/.test(k) && d[k].name === 'Old Adel Home').length, 1, 'no second home');
@@ -4778,7 +4778,9 @@ await check('V65-P01 Pantry catalog: create EN / AR-only / presence products (ze
   await login('owner@example.com'); await page.locator('.hero__home').waitFor();
   assert.equal(await page.locator('.nav-link[href="#/m/inventory"]').count() > 0, true, 'Pantry is in the navigation');
   await page.goto(BASE + '#/m/inventory'); await page.locator('#pn-empty').waitFor();
-  assert.match(await page.locator('#pn-notice').innerText(), /not enabled yet/i, 'stock tracking clearly labelled as not enabled');
+  // P02 update: the Phase 01 "stock not enabled yet" notice is gone; the stronger check is that a new catalog has no stock
+  // RECORDED (status "not recorded yet") while the stock controls now exist (exercised in the V65-P02 checks).
+  assert.equal(await page.locator('#pn-notice').count(), 0, 'Phase 01 notice removed in Phase 02');
   // validation
   await page.click('#pn-new'); await page.locator('#pn-form').waitFor();
   await pnSave(page); await page.locator('#pn-f-msg .banner--error').waitFor();
@@ -4800,7 +4802,10 @@ await check('V65-P01 Pantry catalog: create EN / AR-only / presence products (ze
   assert.deepEqual([docs['أرز بسمتي'].nameEn, docs['أرز بسمتي'].minMilli, docs['أرز بسمتي'].displayUnit, docs['أرز بسمتي'].aliases], [null, 1500000, 'kg', ['rice']]);
   assert.deepEqual([docs['Dish soap'].stockMilli, docs['Dish soap'].presence, docs['Dish soap'].dimension, docs['Dish soap'].minMilli], [null, null, null, null]);
   assert.ok(Object.values(docs).every((d) => d.archived === false && d.createdBy === 'UID_OWNER' && d.schemaVersion === 1));
-  assert.equal(await page.locator('#pn-list .pn-item__stock').count(), 3); assert.equal(await page.locator('#pn-list [data-action*="stock"], #pn-list input[type=number]').count(), 0, 'no stock controls');
+  // P02 update: every product shows "not recorded yet" (stockRev 0), never "out"; the owner now HAS stock controls (one per product).
+  assert.equal(await page.locator('#pn-list .pn-item__stock').count(), 3);
+  assert.deepEqual(await page.locator('#pn-list .pn-st[data-status]').evaluateAll((els) => els.map((e) => e.dataset.status)), ['unrecorded', 'unrecorded', 'unrecorded']);
+  assert.equal(await page.locator('#pn-list [data-action="stock"]').count(), 3, 'stock controls (Phase 02)'); assert.equal(await page.locator('#pn-list input[type=number]').count(), 0);
   // search in either language (normalised), alias, filters
   const names = () => page.locator('#pn-list .pn-item__name').allInnerTexts();
   await page.fill('#pn-search', 'ارز'); await page.waitForTimeout(100); assert.deepEqual(await names(), ['أرز بسمتي'], 'Arabic without hamza finds أرز');
@@ -4844,7 +4849,7 @@ await check('V65-P01 Pantry permissions + layout: viewer read-only (no add / edi
   }, H);
   await login('mona@example.com'); await page.locator('.hero__home').waitFor();
   await page.goto(BASE + '#/m/inventory'); await page.locator('#pn-list .pn-item').nth(1).waitFor();
-  assert.equal(await page.locator('#pn-new, [data-action="edit"], [data-action="archive"], #pn-tab-archived').count(), 0, 'viewer: read-only');
+  assert.equal(await page.locator('#pn-new, [data-action="edit"], [data-action="archive"], #pn-tab-archived, [data-action="stock"]').count(), 0, 'viewer: read-only (P02: no stock controls either)');
   assert.equal(await page.evaluate(() => document.documentElement.dir), 'rtl');
   await ensureTheme(page, 'dark');
   for (const w of [320, 360, 412]) {
@@ -4872,6 +4877,325 @@ await check('V65-P01 Pantry permissions + layout: viewer read-only (no add / edi
   assert.equal(await page.evaluate((h) => window.__fake.listenerCountPrefix(`homes/${h}/pantryProducts`), H), 0, 'child: no listener');
   await logout();
   assert.deepEqual(page.errors.slice(err0), []);
+});
+
+// ======================================================================== V6.5 Phase 02 — Pantry stock
+async function seed65p2(p, H, { monaRole = 'viewer', lang = 'en', templateVersion = 10, stripAdjust = false } = {}) {
+  await seed65(p, H, { monaRole, lang });
+  await p.evaluate(({ h, templateVersion, stripAdjust }) => {
+    for (const r of ['admin', 'member', 'viewer', 'child']) {
+      const cur = window.__fake.dump()[`homes/${h}/roles/${r}`];
+      window.__fake.patch(`homes/${h}/roles/${r}`, { templateVersion, permissions: stripAdjust ? cur.permissions.filter((x) => x !== 'inventory.adjust') : cur.permissions });
+    }
+    window.__fake.patch(`homes/${h}/roles/owner`, { templateVersion });
+    const now = new Date().toISOString();
+    const P = (id, x) => window.__fake.set(`homes/${h}/pantryProducts/${id}`, { nameEn: null, nameAr: null, category: 'other', location: 'pantry', trackMode: 'quantity', dimension: 'count', displayUnit: 'piece',
+      minMilli: null, aliases: [], note: null, stockMilli: 0, presence: null, stockRev: 0, archived: false, archivedAt: null, archivedBy: null, rev: 1, createdBy: 'UID_OWNER', createdAt: now, updatedBy: 'UID_OWNER', updatedAt: now, schemaVersion: 1, ...x });
+    P('pnEggs01', { nameEn: 'Eggs', nameAr: 'بيض', category: 'dairy', location: 'fridge', minMilli: 6000 });
+    P('pnRice01', { nameEn: 'Rice', nameAr: 'أرز', category: 'grains', dimension: 'mass', displayUnit: 'kg', minMilli: 1000000 });
+    P('pnSoap01', { nameEn: 'Dish soap', nameAr: 'صابون', category: 'cleaning', location: 'cupboard', trackMode: 'presence', dimension: null, displayUnit: null, stockMilli: null });
+    P('pnSalt01', { nameEn: 'Salt', nameAr: 'ملح', category: 'spices' });
+  }, { h: H, templateVersion, stripAdjust });
+}
+const pnDoc = (p, H, id) => p.evaluate(({ h, id }) => window.__fake.dump()[`homes/${h}/pantryProducts/${id}`], { h: H, id });
+const pnMoves = (p, H) => p.evaluate((h) => Object.entries(window.__fake.dump()).filter(([k]) => k.startsWith(`homes/${h}/pantryMovements/`)).map(([k, v]) => ({ id: k.split('/').pop(), ...v })).sort((a, b) => a.id.localeCompare(b.id)), H);
+const pnStatus = (p, id) => p.locator(`.pn-item[data-id="${id}"] .pn-st[data-status]`).getAttribute('data-status');
+async function pnStock(p, id, { type, amount, unit, note, state } = {}) {
+  await p.locator(`.pn-item[data-id="${id}"] [data-action="stock"]`).click(); await p.locator('#pn-s-form').waitFor();
+  if (type) await p.check(`#pn-s-type-${type}`);
+  if (state) await p.check(`#pn-s-type-${state}`);
+  if (unit) await p.selectOption('#pn-s-unit', unit);
+  if (amount !== undefined) await p.fill('#pn-s-amount', amount);
+  if (note !== undefined) await p.fill('#pn-s-note', note);
+}
+const pnSaveStock = async (p) => { await p.click('#pn-s-save'); };
+const pnClosed = (p) => p.locator('#pn-s-form').waitFor({ state: 'detached' });
+
+await check('V65-P02 Pantry stock: unrecorded → add / remove / correct / presence with exact integer milli math, preview, overdraft refused, first zero count, threshold equality, immutable movements, bounded newest-first history, status filter + search, unit change keeps the threshold', async () => {
+  await ensureSignedOut(); const err0 = page.errors.length; const H = 'hV65S1';
+  await seed65p2(page, H);
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await login('owner@example.com'); await page.locator('.hero__home').waitFor();
+  await page.goto(BASE + '#/m/inventory'); await page.locator('#pn-list .pn-item').nth(3).waitFor();
+  assert.equal(await page.locator('#pn-notice').count(), 0, 'Phase 01 "not enabled" notice removed');
+  for (const id of ['pnEggs01', 'pnRice01', 'pnSoap01', 'pnSalt01']) assert.equal(await pnStatus(page, id), 'unrecorded', `${id}: stored 0 / null is "not recorded", not "out"`);
+  // add 12 eggs: preview, single batch, rev untouched
+  await pnStock(page, 'pnEggs01', { type: 'add', amount: '12' });
+  assert.match(await page.locator('#pn-s-current').innerText(), /Not recorded yet/);
+  await page.waitForFunction(() => /Resulting balance: 12 pcs/.test(document.querySelector('#pn-s-preview').innerText));
+  await pnSaveStock(page); await pnClosed(page); await page.locator('.toast', { hasText: 'Stock updated' }).first().waitFor();
+  let eggs = await pnDoc(page, H, 'pnEggs01');
+  assert.deepEqual([eggs.stockMilli, eggs.stockRev, eggs.rev, eggs.updatedBy], [12000, 1, 1, 'UID_OWNER'], 'stock write: stockRev + 1, rev unchanged');
+  let mv = await pnMoves(page, H);
+  assert.deepEqual(mv.map((m) => [m.id, m.type, m.beforeMilli, m.deltaMilli, m.afterMilli, m.requestedMilli, m.unfulfilledMilli, m.dimension, m.actorUid, m.coveredMilli, m.ruleRev, m.beforePresence]),
+    [['pnEggs01_s1', 'add', 0, 12000, 12000, 12000, 0, 'count', 'UID_OWNER', 0, null, null]]);
+  assert.equal(Object.keys(mv[0]).length, 25, '24 movement fields + id'); assert.match(mv[0].operationId, /^[A-Za-z0-9_-]{24}$/);
+  await page.waitForFunction(() => document.querySelector('.pn-item[data-id="pnEggs01"] .pn-st[data-status]').dataset.status === 'in');
+  // remove 7 → 5 (< 6 → low); overdraft refused without a write
+  await pnStock(page, 'pnEggs01', { type: 'remove', amount: '7' }); await pnSaveStock(page); await pnClosed(page);
+  await page.waitForFunction(() => document.querySelector('.pn-item[data-id="pnEggs01"] .pn-st[data-status]').dataset.status === 'low');
+  await pnStock(page, 'pnEggs01', { type: 'remove', amount: '6' });
+  await page.waitForFunction(() => /can't remove more than is in stock/.test(document.querySelector('#pn-s-preview').innerText));
+  await pnSaveStock(page); await page.locator('#pn-s-msg .banner--error').waitFor();
+  assert.equal((await pnMoves(page, H)).length, 2, 'overdraft: nothing written');
+  await page.fill('#pn-s-amount', '2.5'); await page.waitForFunction(() => /whole numbers/.test(document.querySelector('#pn-s-preview').innerText));
+  // correction to 6 (== threshold → in stock, equality is not low): reason required
+  await page.check('#pn-s-type-correction'); await page.fill('#pn-s-amount', '٦'); await page.fill('#pn-s-note', '');
+  await pnSaveStock(page); await page.waitForFunction(() => /reason for the correction/i.test(document.querySelector('#pn-s-msg').innerText));
+  await page.fill('#pn-s-note', 'Counted the tray'); await pnSaveStock(page); await pnClosed(page);
+  await page.waitForFunction(() => document.querySelector('.pn-item[data-id="pnEggs01"] .pn-st[data-status]').dataset.status === 'in');
+  eggs = await pnDoc(page, H, 'pnEggs01'); assert.deepEqual([eggs.stockMilli, eggs.stockRev, eggs.rev], [6000, 3, 1]);
+  // rice in grams on a kg product (same dimension), shown back in kg
+  await pnStock(page, 'pnRice01', { type: 'add', unit: 'g', amount: '250' });
+  await page.waitForFunction(() => /Resulting balance: 0\.25 kg/.test(document.querySelector('#pn-s-preview').innerText));
+  await pnSaveStock(page); await pnClosed(page);
+  await page.waitForFunction(() => /0\.25 kg/.test(document.querySelector('.pn-item[data-id="pnRice01"] .pn-item__stock').innerText));
+  assert.equal((await pnDoc(page, H, 'pnRice01')).stockMilli, 250000);
+  // presence: unrecorded → low; the current state cannot be chosen again
+  await pnStock(page, 'pnSoap01', { state: 'low' }); await pnSaveStock(page); await pnClosed(page);
+  await page.waitForFunction(() => document.querySelector('.pn-item[data-id="pnSoap01"] .pn-st[data-status]').dataset.status === 'low');
+  await page.locator('.pn-item[data-id="pnSoap01"] [data-action="stock"]').click(); await page.locator('#pn-s-form').waitFor();
+  assert.equal(await page.locator('#pn-s-type-low').isDisabled(), true, 'same-state presence is not offered');
+  await page.keyboard.press('Escape'); await pnClosed(page);
+  const soapMv = (await pnMoves(page, H)).find((m) => m.id === 'pnSoap01_s1');
+  assert.deepEqual([soapMv.type, soapMv.beforePresence, soapMv.afterPresence, soapMv.beforeMilli, soapMv.deltaMilli, soapMv.dimension, soapMv.coveredMilli], ['presence', null, 'low', null, null, null, 0]);
+  // explicit first zero count (reason) → known empty
+  await pnStock(page, 'pnSalt01', { type: 'correction', amount: '0', note: 'Jar is empty' });
+  assert.equal(await page.locator('#pn-s-firsthint').count(), 1, 'first-count hint');
+  await pnSaveStock(page); await pnClosed(page);
+  await page.waitForFunction(() => document.querySelector('.pn-item[data-id="pnSalt01"] .pn-st[data-status]').dataset.status === 'out');
+  const salt = await pnDoc(page, H, 'pnSalt01'); assert.deepEqual([salt.stockMilli, salt.stockRev], [0, 1], 'known empty, recorded');
+  // history: newest first, before / after / delta, actor, note; no edit / delete controls
+  await page.locator('.pn-item[data-id="pnEggs01"] [data-action="history"]').click(); await page.locator('#pn-hist .pn-hist__item').nth(2).waitFor();
+  assert.deepEqual(await page.locator('#pn-hist .pn-hist__item').evaluateAll((els) => els.map((e) => e.dataset.rev)), ['3', '2', '1']);
+  const h0 = await page.locator('#pn-hist .pn-hist__item').first().innerText();
+  assert.match(h0, /Correct count/); assert.match(h0, /5 → 6 \(\+1\) pcs/); assert.match(h0, /by Abdo|by You/); assert.match(h0, /Counted the tray/);
+  assert.match(await page.locator('#pn-hist-label').innerText(), /Recent history \(latest 50/);
+  assert.equal(await page.locator('#pn-hist button, #pn-hist [data-action]').count(), 0, 'history is read-only');
+  await page.keyboard.press('Escape');
+  // status filter composes with search / category
+  const names = () => page.locator('#pn-list .pn-item__name').allInnerTexts();
+  await page.selectOption('#pn-stat', 'low'); await page.waitForTimeout(80); assert.deepEqual((await names()).sort(), ['Dish soap', 'Rice']);
+  await page.fill('#pn-search', 'ارز'); await page.waitForTimeout(80); assert.deepEqual(await names(), ['Rice']);
+  await page.fill('#pn-search', ''); await page.selectOption('#pn-stat', 'out'); await page.waitForTimeout(80); assert.deepEqual(await names(), ['Salt']);
+  await page.selectOption('#pn-stat', 'in'); await page.selectOption('#pn-cat', 'dairy'); await page.waitForTimeout(80); assert.deepEqual(await names(), ['Eggs']);
+  await page.selectOption('#pn-stat', 'all'); await page.selectOption('#pn-cat', 'all');
+  // editor: changing the display unit re-expresses the threshold (1 kg → 1000 g) — never silently ×1000; dimension locked
+  await page.locator('.pn-item[data-id="pnRice01"] [data-action="edit"]').click(); await page.locator('#pn-form').waitFor();
+  assert.equal(await page.inputValue('#pn-f-min'), '1'); assert.equal(await page.locator('#pn-f-dim').isDisabled(), true, 'dimension locked after a movement');
+  await page.selectOption('#pn-f-unit', 'g'); assert.equal(await page.inputValue('#pn-f-min'), '1000');
+  await pnSave(page); await page.locator('#pn-form').waitFor({ state: 'detached' });
+  const rice = await pnDoc(page, H, 'pnRice01');
+  assert.deepEqual([rice.displayUnit, rice.minMilli, rice.stockMilli, rice.stockRev, rice.rev], ['g', 1000000, 250000, 1, 2], 'catalog edit: rev + 1, stock untouched');
+  await page.waitForFunction(() => /250 g/.test(document.querySelector('.pn-item[data-id="pnRice01"] .pn-item__stock').innerText));
+  assert.equal((await pnMoves(page, H)).length, 6, 'six movements, none edited or deleted');
+  assert.deepEqual(page.errors.slice(err0), []);
+  await logout();
+});
+
+await check('V65-P02 Pantry stock safety: stale dialog, concurrent write → conflict (not applied), lost acknowledgement → confirmed once, duplicate clicks → one movement, cached / offline blocks, pending write never shown as saved, unknown → explicit review, archive race, listeners released', async () => {
+  await ensureSignedOut(); const err0 = page.errors.length; const H = 'hV65S2';
+  await seed65p2(page, H);
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await login('owner@example.com'); await page.locator('.hero__home').waitFor();
+  await page.goto(BASE + '#/m/inventory'); await page.locator('#pn-list .pn-item').nth(3).waitFor();
+  const foreign = (h, pid, rev, before, after) => ({ productId: pid, stockRev: rev, type: 'add', beforeMilli: before, deltaMilli: after - before, afterMilli: after, requestedMilli: after - before, unfulfilledMilli: 0, note: null,
+    ruleRev: null, segment: null, occFrom: null, occTo: null, coveredMilli: 0, tripId: null, line: null, cookId: null, actorUid: 'UID_MONA', at: new Date().toISOString(), schemaVersion: 1,
+    beforePresence: null, afterPresence: null, dimension: 'count', operationId: 'opForeignxxxxxxxxxxxxxxx' });
+  // 1. stale dialog: another device moves the product on while the dialog is open → cannot submit
+  await pnStock(page, 'pnEggs01', { type: 'add', amount: '1' });
+  await page.evaluate(({ h, m }) => { window.__fake.set(`homes/${h}/pantryMovements/pnEggs01_s1`, m); window.__fake.patch(`homes/${h}/pantryProducts/pnEggs01`, { stockMilli: 4000, stockRev: 1 }); }, { h: H, m: foreign(H, 'pnEggs01', 1, 0, 4000) });
+  await page.locator('#pn-s-stale').waitFor(); assert.equal(await page.locator('#pn-s-save').isDisabled(), true);
+  await page.keyboard.press('Escape'); await pnClosed(page);
+  // 2. concurrent write lands between submit and commit → rules refuse ours; server read finds a FOREIGN movement → conflict
+  await pnStock(page, 'pnEggs01', { type: 'add', amount: '2' });
+  await page.evaluate(({ h, m }) => {
+    document.querySelector('#pn-s-save').click();   // submit runs synchronously up to the commit, then the other device lands first
+    window.__fake.set(`homes/${h}/pantryMovements/pnEggs01_s2`, m); window.__fake.patch(`homes/${h}/pantryProducts/pnEggs01`, { stockMilli: 5000, stockRev: 2 });
+  }, { h: H, m: foreign(H, 'pnEggs01', 2, 4000, 5000) });
+  await page.locator('#pn-s-conflict').waitFor();
+  assert.equal(await page.locator('#pn-s-save').isHidden(), true, 'no resubmission from a conflicted dialog');
+  let eggs = await pnDoc(page, H, 'pnEggs01'); assert.deepEqual([eggs.stockMilli, eggs.stockRev], [5000, 2], 'the other device won; ours was not applied');
+  await page.keyboard.press('Escape'); await pnClosed(page);
+  // 3. lost acknowledgement: the batch landed, the SDK reported failure → server read of the deterministic id → confirmed
+  await page.evaluate(() => { window.__fakeLoseAckNext = true; });
+  await pnStock(page, 'pnEggs01', { type: 'add', amount: '1' }); await pnSaveStock(page); await pnClosed(page);
+  await page.locator('.toast', { hasText: 'Confirmed: the stock change was saved' }).first().waitFor();
+  eggs = await pnDoc(page, H, 'pnEggs01'); assert.deepEqual([eggs.stockMilli, eggs.stockRev], [6000, 3]);
+  assert.equal((await pnMoves(page, H)).filter((m) => m.productId === 'pnEggs01').length, 3, 'exactly one movement for the recovered write');
+  // 4. duplicate clicks → one batch
+  await pnStock(page, 'pnEggs01', { type: 'remove', amount: '1' });
+  await page.evaluate(() => { const b = document.querySelector('#pn-s-save'); b.click(); b.click(); b.click(); document.querySelector('#pn-s-form').requestSubmit(); });
+  await pnClosed(page);
+  assert.equal((await pnMoves(page, H)).filter((m) => m.productId === 'pnEggs01').length, 4, 'four clicks, one movement');
+  // 5. pending write (network dropped right after submit): shown as pending, never as saved; confirmed when the connection returns
+  await page.waitForFunction(() => !document.querySelector('.toast'), null, { timeout: 15000 });   // earlier success toasts gone first
+  await page.evaluate(() => { window.__fakeHoldNextCommit = true; });
+  await pnStock(page, 'pnRice01', { type: 'add', amount: '1' }); await pnSaveStock(page);
+  await page.locator('#pn-s-waiting').waitFor();
+  await page.waitForFunction(() => document.querySelector('.pn-item[data-id="pnRice01"] [data-flag="pending"], .pn-item[data-id="pnRice01"] [data-flag="submitting"]'));
+  assert.equal(await page.locator('.toast', { hasText: 'Stock updated' }).count(), 0, 'no success claim while pending');
+  assert.equal((await pnDoc(page, H, 'pnRice01')).stockRev, 0, 'server truth unchanged while pending');
+  await page.keyboard.press('Escape'); await pnClosed(page);   // the dialog may close; the operation stays tracked
+  assert.equal(await page.locator('.pn-item[data-id="pnRice01"] [data-action="stock"]').count(), 1);
+  await page.evaluate(() => window.__fake.setOffline(false));
+  await page.locator('.toast', { hasText: 'Stock updated' }).first().waitFor();
+  await page.waitForFunction(() => !document.querySelector('.pn-item[data-id="pnRice01"] [data-flag]'));
+  assert.deepEqual([(await pnDoc(page, H, 'pnRice01')).stockMilli, (await pnDoc(page, H, 'pnRice01')).stockRev], [1000000, 1]);
+  // 6. offline / cached snapshot: explicit banner + flags; stock dialog cannot submit
+  await page.evaluate(() => window.__fake.setOffline(true));
+  await page.locator('#pn-cached').waitFor(); await page.locator('.pn-item[data-id="pnEggs01"] [data-flag="cached"]').waitFor();
+  await page.locator('.pn-item[data-id="pnEggs01"] [data-action="stock"]').click(); await page.locator('#pn-s-blocked').waitFor();
+  assert.equal(await page.locator('#pn-s-save').isDisabled(), true);
+  await page.keyboard.press('Escape'); await pnClosed(page);
+  await page.evaluate(() => window.__fake.setOffline(false)); await page.locator('#pn-cached').waitFor({ state: 'detached' });
+  // 7. unknown: commit refused AND the server unreachable → review required before another change; "Check again" → not applied
+  await page.evaluate(() => { window.__fakeFailNextCommit = true; window.__fakeServerDown = true; });
+  await pnStock(page, 'pnSalt01', { type: 'add', amount: '3' }); await pnSaveStock(page);
+  await page.locator('#pn-s-unknown').waitFor(); await page.locator('#pn-s-review').waitFor();
+  await page.click('#pn-s-review'); await page.locator('#pn-s-unknown').waitFor();
+  await page.keyboard.press('Escape'); await pnClosed(page);
+  await page.locator('.pn-item[data-id="pnSalt01"] [data-flag="unknown"]').waitFor();
+  await page.locator('.pn-item[data-id="pnSalt01"] [data-action="stock"]').click(); await page.locator('#pn-s-unknown').waitFor();
+  assert.equal(await page.locator('#pn-s-save').isHidden(), true, 'no new change before the review');
+  assert.equal(await page.locator('#pn-s-review').isVisible(), true);
+  await page.keyboard.press('Escape'); await pnClosed(page);
+  await page.evaluate(() => { window.__fakeServerDown = false; });
+  await page.locator('.pn-item[data-id="pnSalt01"] [data-flag="unknown"]').click();
+  await page.locator('#pn-s-unknown').waitFor(); assert.equal(await page.locator('#pn-s-save').isHidden(), true, 'review mode: no new write offered');
+  await page.click('#pn-s-review'); await page.locator('#pn-s-rejected').waitFor();
+  assert.match(await page.locator('#pn-s-rejected').innerText(), /Not saved/);
+  await page.waitForFunction(() => !document.querySelector('.pn-item[data-id="pnSalt01"] [data-flag="unknown"]'));
+  assert.equal((await pnDoc(page, H, 'pnSalt01')).stockRev, 0, 'not applied, never retried automatically');
+  await page.keyboard.press('Escape'); await pnClosed(page);
+  // 8. archive race: archived elsewhere while the dialog is open → stale, nothing written
+  await pnStock(page, 'pnSalt01', { type: 'add', amount: '1' });
+  await page.evaluate((h) => window.__fake.patch(`homes/${h}/pantryProducts/pnSalt01`, { archived: true, archivedAt: new Date().toISOString(), archivedBy: 'UID_MONA', rev: 2 }), H);
+  await page.locator('#pn-s-stale').waitFor(); await page.keyboard.press('Escape'); await pnClosed(page);
+  assert.equal((await pnDoc(page, H, 'pnSalt01')).stockRev, 0);
+  // 9. scope disposal: a late history result after sign-out renders nothing and no listener survives
+  assert.ok(await page.evaluate((h) => window.__fake.listenerCountPrefix(`homes/${h}/pantryProducts`), H) >= 1);
+  assert.equal(await page.evaluate((h) => window.__fake.listenerCountPrefix(`homes/${h}/pantryMovements`), H), 0, 'history uses no listener');
+  await logout();
+  assert.equal(await page.evaluate((h) => window.__fake.listenerCountPrefix(`homes/${h}/pantryProducts`), H), 0, 'listener released on sign-out');
+  assert.deepEqual(page.errors.slice(err0), []);
+});
+
+await check('V65-P02 Pantry stock permissions + layout: viewer reads history only; member without inventory.adjust (template v9) has no correction until the owner upgrades roles (v10, additive); archived read-only; child none; AR RTL dark 320 dialog without overflow', async () => {
+  await ensureSignedOut(); const err0 = page.errors.length; const H = 'hV65S3';
+  await seed65p2(page, H, { monaRole: 'viewer', lang: 'ar', templateVersion: 9, stripAdjust: true });
+  await page.evaluate((h) => window.__fake.patch(`homes/${h}/pantryProducts/pnEggs01`, { stockMilli: 3000, stockRev: 1 }), H);
+  await page.evaluate((h) => window.__fake.set(`homes/${h}/pantryMovements/pnEggs01_s1`, { productId: 'pnEggs01', stockRev: 1, type: 'add', beforeMilli: 0, deltaMilli: 3000, afterMilli: 3000, requestedMilli: 3000, unfulfilledMilli: 0,
+    note: null, ruleRev: null, segment: null, occFrom: null, occTo: null, coveredMilli: 0, tripId: null, line: null, cookId: null, actorUid: 'UID_OWNER', at: new Date().toISOString(), schemaVersion: 1,
+    beforePresence: null, afterPresence: null, dimension: 'count', operationId: 'opSeedxxxxxxxxxxxxxxxxxx' }), H);
+  // viewer: history yes, stock no
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await login('mona@example.com'); await page.locator('.hero__home').waitFor();
+  await page.goto(BASE + '#/m/inventory'); await page.locator('#pn-list .pn-item').nth(3).waitFor();
+  assert.equal(await page.locator('[data-action="stock"]').count(), 0, 'viewer: no stock controls');
+  assert.equal(await page.locator('[data-action="history"]').count(), 4, 'viewer: history for every product');
+  await page.locator('.pn-item[data-id="pnEggs01"] [data-action="history"]').click(); await page.locator('#pn-hist .pn-hist__item').first().waitFor();
+  assert.match(await page.locator('#pn-hist').innerText(), /إضافة/); assert.match(await page.locator('#pn-hist').innerText(), /Abdo|عضو/);
+  await page.keyboard.press('Escape'); await logout();
+  // member on template v9 (no adjust): add / remove only
+  await page.evaluate((h) => window.__fake.patch(`homes/${h}/members/UID_MONA`, { roleId: 'member' }), H);
+  await login('mona@example.com'); await page.goto(BASE + '#/m/inventory'); await page.locator('#pn-list .pn-item').nth(3).waitFor();
+  await page.locator('.pn-item[data-id="pnEggs01"] [data-action="stock"]').click(); await page.locator('#pn-s-form').waitFor();
+  assert.deepEqual(await page.locator('#pn-s-type input').evaluateAll((els) => els.map((e) => e.value)), ['add', 'remove'], 'no correction without inventory.adjust (never falls back to edit)');
+  await page.keyboard.press('Escape'); await pnClosed(page); await logout();
+  // owner upgrades the default roles (owner-triggered, additive v10)
+  await login('owner@example.com'); await page.goto(BASE + '#/settings');
+  await page.getByRole('button', { name: /تحديث الأدوار|Update default roles/ }).click();
+  await page.waitForFunction((h) => (window.__fake.dump()[`homes/${h}/roles/member`] || {}).templateVersion === 10, H);
+  const member = await page.evaluate((h) => window.__fake.dump()[`homes/${h}/roles/member`].permissions, H);
+  assert.ok(member.includes('inventory.adjust') && member.includes('inventory.edit'));
+  const child = await page.evaluate((h) => window.__fake.dump()[`homes/${h}/roles/child`].permissions, H);
+  assert.ok(!child.some((x) => x.startsWith('inventory.')), 'child gains nothing');
+  // owner: archived product is read-only but keeps its history
+  await page.evaluate((h) => window.__fake.patch(`homes/${h}/pantryProducts/pnSalt01`, { archived: true, archivedAt: new Date().toISOString(), archivedBy: 'UID_OWNER', rev: 2 }), H);
+  await page.goto(BASE + '#/m/inventory'); await page.locator('#pn-list .pn-item').nth(2).waitFor();
+  await page.click('#pn-tab-archived'); await page.locator('.pn-item--archived[data-id="pnSalt01"]').waitFor();
+  assert.equal(await page.locator('.pn-item[data-id="pnSalt01"] [data-action="stock"]').count(), 0, 'archived: no stock control');
+  assert.equal(await page.locator('.pn-item[data-id="pnSalt01"] [data-action="history"]').count(), 1);
+  await page.click('#pn-tab-active'); await logout();
+  // member after the upgrade: correction available; AR RTL dark 320 dialog fits
+  await login('mona@example.com'); await page.goto(BASE + '#/m/inventory'); await page.locator('#pn-list .pn-item').nth(2).waitFor();
+  assert.equal(await page.evaluate(() => document.documentElement.dir), 'rtl');
+  await ensureTheme(page, 'dark');
+  await page.setViewportSize({ width: 320, height: 760 }); await page.waitForTimeout(120);
+  assert.ok((await page.evaluate(() => document.documentElement.scrollWidth - innerWidth)) <= 0, 'AR dark 320: list without horizontal overflow');
+  const a = await page.locator('#pn-cat').boundingBox(); const b = await page.locator('#pn-loc').boundingBox(); assert.ok(Math.abs(a.y - b.y) < 4, '320: category + location still side by side');
+  await page.locator('.pn-item[data-id="pnEggs01"] [data-action="stock"]').click(); await page.locator('#pn-s-form').waitFor();
+  assert.deepEqual(await page.locator('#pn-s-type input').evaluateAll((els) => els.map((e) => e.value)), ['add', 'remove', 'correction']);
+  assert.equal(await page.evaluate(() => document.activeElement && document.activeElement.id), 'pn-s-amount', 'focus starts on the amount');
+  await page.fill('#pn-s-amount', '٢'); await page.waitForFunction(() => /5/.test(document.querySelector('#pn-s-preview').innerText));
+  const dlg = await page.locator('dialog[open]').boundingBox(); assert.ok(dlg.x >= 0 && dlg.x + dlg.width <= 320.5, 'dialog fits 320 px');
+  await shot(page, '95-v65p02-stock-ar-dark-320');
+  await page.check('#pn-s-type-correction'); await page.fill('#pn-s-amount', '4'); await page.fill('#pn-s-note', 'عدّ يدوي');
+  await pnSaveStock(page); await pnClosed(page);
+  await page.waitForFunction(() => document.querySelector('.pn-item[data-id="pnEggs01"] .pn-st[data-status]').dataset.status === 'low');
+  const last = (await pnMoves(page, H)).find((m) => m.id === 'pnEggs01_s2');
+  assert.deepEqual([last.type, last.beforeMilli, last.afterMilli, last.deltaMilli, last.note, last.actorUid], ['correction', 3000, 4000, 1000, 'عدّ يدوي', 'UID_MONA']);
+  await page.setViewportSize({ width: 1280, height: 900 }); await ensureTheme(page, 'light');
+  await logout();
+  // child: no Pantry, no listener
+  await page.evaluate((h) => window.__fake.patch(`homes/${h}/members/UID_MONA`, { roleId: 'child' }), H);
+  await login('mona@example.com'); await page.locator('.hero__home').waitFor();
+  assert.equal(await page.locator('.nav-link[href="#/m/inventory"]').count(), 0);
+  await logout();
+  assert.deepEqual(page.errors.slice(err0), []);
+});
+
+await check('V65-P02 review: an unconfirmed stock change survives sign-out and page reload, is resolved only by server reads (not saved / confirmed notices, never resent), and an identical repeat needs explicit confirmation', async () => {
+  await ensureSignedOut(); const err0 = page.errors.length; const H = 'hV65S4';
+  await seed65p2(page, H);
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await login('owner@example.com'); await page.locator('.hero__home').waitFor();
+  await page.goto(BASE + '#/m/inventory'); await page.locator('#pn-list .pn-item').nth(3).waitFor();
+  const regKey = `homehub.pantry.pendingStock.v1.UID_OWNER.${H}`;
+  const reg = () => page.evaluate((k) => JSON.parse(localStorage.getItem(k) || '[]'), regKey);
+  // 1. commit refused + server unreachable → unknown; recorded on the device
+  await page.evaluate(() => { window.__fakeFailNextCommit = true; window.__fakeServerDown = true; });
+  await pnStock(page, 'pnSalt01', { type: 'add', amount: '3' }); await pnSaveStock(page);
+  await page.locator('#pn-s-unknown').waitFor(); await page.keyboard.press('Escape'); await pnClosed(page);
+  await page.locator('#pn-ops').waitFor();
+  assert.match(await page.locator('#pn-ops').innerText(), /1 stock change on this device was not confirmed/);
+  assert.equal((await reg()).length, 1, 'intent recorded before sending');
+  // 2. sign-out → sign-in (same user): recovered, still blocked; "Check now" reads the server → not saved
+  await logout(); await login('owner@example.com'); await page.goto(BASE + '#/m/inventory'); await page.locator('#pn-list .pn-item').nth(3).waitFor();
+  await page.locator('#pn-ops').waitFor();
+  await page.locator('.pn-item[data-id="pnSalt01"] [data-flag="unknown"]').waitFor();
+  await page.evaluate(() => { window.__fakeServerDown = false; });
+  await page.click('#pn-ops-check');
+  await page.locator('[data-notice="rejected"]').waitFor();
+  assert.match(await page.locator('[data-notice="rejected"]').innerText(), /earlier stock change to Salt was NOT saved/);
+  assert.equal(await page.locator('#pn-ops').count(), 0); assert.deepEqual(await reg(), [], 'resolved → removed from the device');
+  assert.equal((await pnDoc(page, H, 'pnSalt01')).stockRev, 0, 'never resent');
+  await page.locator('[data-notice="rejected"] [data-action="dismiss"]').click(); await page.locator('[data-notice]').waitFor({ state: 'detached' });
+  // 3. lost acknowledgement + server unreachable → unknown; RELOAD → automatic read-only check → confirmed notice
+  await page.evaluate(() => { window.__fakeLoseAckNext = true; window.__fakeServerDown = true; });
+  await pnStock(page, 'pnRice01', { type: 'add', amount: '2' }); await pnSaveStock(page);
+  await page.locator('#pn-s-unknown').waitFor(); await page.keyboard.press('Escape'); await pnClosed(page);
+  assert.equal((await reg()).length, 1);
+  await page.reload(); await page.locator('#pn-list .pn-item').nth(3).waitFor();
+  await page.locator('[data-notice="confirmed"]').waitFor();
+  assert.match(await page.locator('[data-notice="confirmed"]').innerText(), /earlier stock change to Rice was saved/);
+  assert.deepEqual(await reg(), []);
+  const rice = await pnDoc(page, H, 'pnRice01'); assert.deepEqual([rice.stockMilli, rice.stockRev], [2000000, 1], 'applied exactly once');
+  assert.equal((await pnMoves(page, H)).filter((m) => m.productId === 'pnRice01').length, 1);
+  // 4. repeat guard: the same change right after a confirmed one needs "record it again"
+  await pnStock(page, 'pnEggs01', { type: 'add', amount: '2' }); await pnSaveStock(page); await pnClosed(page);
+  await pnStock(page, 'pnEggs01', { type: 'add', amount: '2' });
+  await page.locator('#pn-s-dup').waitFor({ state: 'visible' });
+  assert.equal(await page.locator('#pn-s-save').isDisabled(), true, 'repeat: save disabled until confirmed');
+  await page.fill('#pn-s-amount', '3'); await page.waitForFunction(() => document.querySelector('#pn-s-dup').hidden);
+  assert.equal(await page.locator('#pn-s-save').isDisabled(), false, 'a different amount is not a repeat');
+  await page.fill('#pn-s-amount', '2'); await page.locator('#pn-s-dup').waitFor({ state: 'visible' });
+  await page.check('#pn-s-dup-ok'); assert.equal(await page.locator('#pn-s-save').isDisabled(), false);
+  await pnSaveStock(page); await pnClosed(page);
+  const eggs = await pnDoc(page, H, 'pnEggs01'); assert.deepEqual([eggs.stockMilli, eggs.stockRev], [4000, 2], 'two deliberate, confirmed changes');
+  assert.deepEqual(page.errors.slice(err0), []);
+  await logout();
 });
 
 await check('ADV-NIGHT routine day honours stored startHour during 00:00–03:00; no wrong-day or duplicate routine on a new session', async () => {

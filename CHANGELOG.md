@@ -1,5 +1,23 @@
 # Changelog
 
+## 6.5.0-p02 — V6.5 Phase 02: Pantry stock foundation (November 2026) — NOT DEPLOYED, awaiting review
+
+- **Manual stock:** add / remove (positive amounts, any unit of the product's dimension, ≤ 10^9 milli per change, no overdraft), absolute **correction with a mandatory reason** (a first count of 0 records a known-empty product), and **presence** (have it / running low / out). Exact integer milli arithmetic; Arabic digits; whole pieces; live resulting-balance preview.
+- **Status everywhere:** not recorded yet (Phase 01 products: stored 0 with `stockRev 0` is *not* "out") · out · low (strictly below the threshold) · in stock; presence states; cached / pending / unconfirmed shown explicitly. New stock-status filter alongside search, category and place.
+- **Immutable history:** `pantryMovements/{productId}_s{stockRev}` — one per change, created in the same batch as the product's stock update, never edited or deleted. "Recent history" (latest 50, newest first) on demand, readable by viewers.
+- **Safe writes:** one product per batch; deterministic id + stockRev precondition; submission bound to the captured revision / dimension / operation id; duplicate submits blocked; on an ambiguous failure a server-confirmed read decides confirmed / conflict / not applied / unknown (explicit review). No automatic retry; no offline persistence.
+- **Permissions:** add / remove / presence = `inventory.edit`; correction = new `inventory.adjust` (admin, member; owner `*`) via role template **v10** — additive, owner-triggered ("Update default roles"), adds only that grant. Every stock write also needs `inventory.view`.
+- **Index:** `pantryMovements (productId ASC, stockRev DESC)` — the first entry in `firestore.indexes.json`.
+- Editor fix: changing the display unit re-expresses the low-stock level (1 kg → 1000 g) instead of silently re-reading the number in the new unit.
+- The Phase 01 "stock tracking is not enabled yet" notice is removed.
+- **Review fixes:**
+  - unconfirmed stock changes are recorded per device and user, so they survive a Home switch, sign-out and page reload;
+  - they are resolved only by server reads (automatically once, or with "Check now"), never resent;
+  - an `operationId` is never reused;
+  - an identical change made right after a confirmed one needs "record it again";
+  - one product per batch is documented as an application constraint, and the rules validate each pair;
+  - the normal and strict emulator CI gates are pinned by a static test.
+
 ## 6.5.0-p01 — V6.5 Phase 01: Pantry product catalog (November 2026) — NOT DEPLOYED, awaiting review
 
 - **Pantry (Inventory module) enabled** as a shared, bilingual product catalog: add, edit, archive / restore; search in English or Arabic (diacritics, tatweel, alef forms, ة/ه and Arabic digits folded; aliases), category and place filters; quantity (pieces, g / kg, ml / l) or presence tracking; optional low-stock level; similar-name warning; empty, loading, error and truncation states; 320 px, RTL and dark.

@@ -15,7 +15,11 @@ export function collection(db, ...segs) { return { type: 'collection', path: joi
 export function where(field, op, value) { return { field, op, value }; }
 // V6.4 B: query(col, where?, limit?) — constraints in any order (contacts use where + limit).
 export function limit(n) { return { limit: n }; }
-export function query(col, ...cs) { return { type: 'query', path: col.path, where: cs.find((c) => c && 'field' in c), limit: (cs.find((c) => c && 'limit' in c) || {}).limit }; }
+// V6.5 P02: orderBy (pantry history: productId == + stockRev desc + limit).
+export function orderBy(field, dir = 'asc') { return { orderBy: field, dir }; }
+export function query(col, ...cs) {
+  return { type: 'query', path: col.path, where: cs.find((c) => c && 'field' in c), limit: (cs.find((c) => c && 'limit' in c) || {}).limit, order: cs.find((c) => c && 'orderBy' in c) || null };
+}
 function matchesWhere(d, w) {
   if (!w) return true;
   const v = d[w.field]; // like Firestore: a missing field never matches
@@ -45,9 +49,13 @@ function resolveTs(data) {
   for (const [k, v] of Object.entries(data)) out[k] = v === SENTINEL ? new Date().toISOString() : v;
   return out;
 }
-function snap(path) {
-  const d = state.db[path];
-  return { id: path.split('/').pop(), exists: () => d !== undefined, data: () => (d ? { ...d } : undefined) };
+// V6.5 P02: local (not yet acknowledged) writes made while "offline" live in state.pending and are shown with
+// metadata.hasPendingWrites, like the real SDK's latency compensation; state.db stays the SERVER truth.
+function view(path) { return state.pending && path in state.pending ? state.pending[path] : state.db[path]; }
+function snap(path, { server = false } = {}) {
+  const d = server ? state.db[path] : view(path);
+  return { id: path.split('/').pop(), exists: () => d !== undefined, data: () => (d ? { ...d } : undefined),
+    metadata: { hasPendingWrites: !server && !!(state.pending && path in state.pending), fromCache: !server && !!state.offline } };
 }
 function checkRead(path) {
   const user = currentUser();
@@ -79,18 +87,29 @@ export async function getDoc(ref) {
   }
   return snap(ref.path);
 }
+/** V6.5 P02: server-confirmed read — never from the cache; rejects while offline (like the real SDK). */
+export async function getDocFromServer(ref) {
+  await new Promise((r) => setTimeout(r, 20));
+  if (state.offline || window.__fakeServerDown) throw err('unavailable');
+  checkRead(ref.path);
+  return snap(ref.path, { server: true });
+}
 export async function getDocs(col) {
   checkRead(col.path + '/x');
-  if (col.type === 'query') { checkQuery(col); return collectionSnap(col.path, col.where, col.limit); }
+  if (col.type === 'query') { checkQuery(col); return collectionSnap(col.path, col.where, col.limit, col.order); }
   if (/\/(contacts|contactCategories)$/.test(col.path)) checkQuery({ path: col.path, where: null });
   const depth = col.path.split('/').length + 1;
   const docs = Object.keys(state.db).filter((p) => p.startsWith(col.path + '/') && p.split('/').length === depth).map(snap);
   return { docs };
 }
-function collectionSnap(path, w, max) {
+function collectionSnap(path, w, max, order = null) {
   const depth = path.split('/').length + 1;
-  const docs = Object.keys(state.db).filter((p) => p.startsWith(path + '/') && p.split('/').length === depth && matchesWhere(state.db[p], w)).sort().map(snap);
-  return { docs: Number.isInteger(max) ? docs.slice(0, max) : docs };
+  const keys = [...new Set([...Object.keys(state.db), ...Object.keys(state.pending || {})])];
+  let paths = keys.filter((p) => p.startsWith(path + '/') && p.split('/').length === depth && view(p) !== undefined && matchesWhere(view(p), w)).sort();
+  if (order) { const f = order.orderBy; const sgn = order.dir === 'desc' ? -1 : 1; paths = paths.sort((a, b) => sgn * ((view(a)[f] > view(b)[f]) - (view(a)[f] < view(b)[f]))); }
+  const docs = paths.map((p) => snap(p));
+  const out = Number.isInteger(max) ? docs.slice(0, max) : docs;
+  return { docs: out, metadata: { fromCache: !!state.offline, hasPendingWrites: out.some((d) => d.metadata.hasPendingWrites) } };
 }
 /**
  * Query privacy, mirroring what firestore.rules allow for finance listeners, so the E2E
@@ -100,8 +119,8 @@ function collectionSnap(path, w, max) {
  */
 function checkQuery(q) {
   const user = currentUser();
-  // V6.5 P01 (mirrors firestore.rules): the Pantry catalog needs inventory.view in THIS home.
-  if (/\/pantryProducts$/.test(q.path)) {
+  // V6.5 P01 / P02 (mirrors firestore.rules): the Pantry catalog and stock history need inventory.view in THIS home.
+  if (/\/(pantryProducts|pantryMovements)$/.test(q.path)) {
     const home = q.path.split('/')[1]; const m = state.db[`homes/${home}/members/${user.uid}`];
     const perms = ((m && m.status === 'active' && state.db[`homes/${home}/roles/${m.roleId}`]) || {}).permissions || [];
     if (!(perms.includes('*') || perms.includes('inventory.*') || perms.includes('inventory.view'))) throw err('permission-denied');
@@ -131,7 +150,9 @@ function checkQuery(q) {
 /** Phase 5: rules are not filters — an UNCONSTRAINED listener on a private collection is denied. */
 const PRIVATE_COLLECTIONS = /\/(savingsAssets|savingsEvents|zakatRecords|wallets|expenses|walletMovements|spendingCycles|commitments)$/;
 function checkCollection(path) { if (PRIVATE_COLLECTIONS.test(path)) throw err('permission-denied'); }
-export function onSnapshot(ref, next, onError) {
+export function onSnapshot(ref, a, b, c) {
+  // V6.5 P02: onSnapshot(ref, { includeMetadataChanges }, next, error) as well as onSnapshot(ref, next, error).
+  const [next, onError] = typeof a === 'function' ? [a, b] : [b, c];
   const isCol = ref.type === 'collection' || ref.type === 'query';
   const fire = () => {
     try {
@@ -140,7 +161,7 @@ export function onSnapshot(ref, next, onError) {
       checkRead(isCol ? ref.path + '/x' : ref.path);
       if (ref.type === 'query') checkQuery(ref);
       else if (ref.type === 'collection') checkCollection(ref.path);
-      next(isCol ? collectionSnap(ref.path, ref.where, ref.limit) : snap(ref.path));
+      next(isCol ? collectionSnap(ref.path, ref.where, ref.limit, ref.order) : snap(ref.path));
     }
     catch (e) { onError && onError(e); }
   };
@@ -166,6 +187,16 @@ export function writeBatch() {
     update(ref, data) { ops.push(['update', ref.path, data]); },
     delete(ref) { ops.push(['delete', ref.path]); },   // Phase 5.6
     async commit() {
+      // V6.5 P02: offline → the write is applied locally as PENDING (listeners see hasPendingWrites) and the promise does
+      // not settle until the connection returns; then the server-side checks below run as usual.
+      if (state.offline || window.__fakeHoldNextCommit) {
+        window.__fakeHoldNextCommit = false;   // test control: "the network dropped right after submit" (released by setOffline(false))
+        state.pending = state.pending || {};
+        for (const [op, path, data] of ops) if (op !== 'delete') state.pending[path] = op === 'set' ? resolveTs(data) : { ...(view(path) || {}), ...resolveTs(data) };
+        for (const [, path] of ops) notify(path);
+        await new Promise((res) => { (state.onlineWaiters = state.onlineWaiters || []).push(res); });
+        for (const [, path] of ops) { delete state.pending[path]; notify(path); }
+      }
       // Phase 5.3.2: emulate the real SDK's OPTIMISTIC local writes — new docs appear in listeners
       // immediately and are ROLLED BACK if the server rejects the request (the visible production symptom).
       const optimistic = window.__fakeOptimistic ? ops.filter(([op, path]) => op === 'set' && !state.db[path]).map(([, path, data]) => path) : [];
@@ -181,6 +212,7 @@ export function writeBatch() {
       for (const p of optimistic) delete state.db[p];
       for (const [op, path] of ops) if (op === 'update' && !state.db[path]) throw err('not-found');
       checkAdoption(ops);
+      checkPantryStock(ops);
       // Mirrors the rules: an expense id that already exists cannot be "created" again
       // (e.g. paying the same commitment due date twice).
       // Create-only collections (mirrors the rules): re-creating an existing doc is refused.
@@ -196,8 +228,40 @@ export function writeBatch() {
       }
       persist();
       for (const [, path] of ops) notify(path);
+      // V6.5 P02 test control: the server applied the batch but the acknowledgement was lost (the SDK reports a failure).
+      if (window.__fakeLoseAckNext) { window.__fakeLoseAckNext = false; throw err('permission-denied'); }
     },
   };
+}
+
+/**
+ * V6.5 P02 — mirror of the pantry stock rules (the authoritative proof is the emulator suite, V65P02-*): a stock update
+ * (stockRev in the mask) must be stockRev + 1 on an ACTIVE product, never change rev, and come with a NEW movement at
+ * {pid}_s{stockRev} in the same batch; a movement is never written alone; correction needs inventory.adjust, the other
+ * types inventory.edit, all need inventory.view.
+ */
+function checkPantryStock(ops) {
+  const user = currentUser();
+  const perms = (home) => { const m = state.db[`homes/${home}/members/${user && user.uid}`]; return ((m && m.status === 'active' && state.db[`homes/${home}/roles/${m.roleId}`]) || {}).permissions || []; };
+  const can = (home, a) => { const p = perms(home); return p.includes('*') || p.includes('inventory.*') || p.includes(`inventory.${a}`); };
+  for (const [op, path, data] of ops) {
+    const mp = /^homes\/([^/]+)\/pantryProducts\/([^/]+)$/.exec(path);
+    if (mp && op === 'update' && data && 'stockRev' in data) {
+      const cur = state.db[path]; const movPath = `homes/${mp[1]}/pantryMovements/${mp[2]}_s${data.stockRev}`;
+      const mov = ops.find(([o, p]) => o === 'set' && p === movPath);
+      const ok = cur && cur.archived === false && data.stockRev === cur.stockRev + 1 && !('rev' in data) && mov && !state.db[movPath]
+        && Object.keys(data).every((k) => ['stockMilli', 'presence', 'stockRev', 'updatedBy', 'updatedAt'].includes(k))
+        && mov[2].beforeMilli === (cur.trackMode === 'quantity' ? cur.stockMilli : null) && mov[2].actorUid === user.uid
+        && can(mp[1], 'view') && can(mp[1], mov[2].type === 'correction' ? 'adjust' : 'edit');
+      if (!ok) throw err('permission-denied');
+    }
+    const mm = /^homes\/([^/]+)\/pantryMovements\/(.+)_s(\d+)$/.exec(path);
+    if (/\/pantryMovements\//.test(path)) {
+      if (op !== 'set' || !mm || state.db[path]) throw err('permission-denied');
+      const pPath = `homes/${mm[1]}/pantryProducts/${mm[2]}`;
+      if (!ops.some(([o, p, d]) => o === 'update' && p === pPath && d && d.stockRev === Number(mm[3]))) throw err('permission-denied');
+    }
+  }
 }
 
 /**

@@ -447,7 +447,7 @@ service cloud.firestore {
     // createdBy is the caller, and it has NO roles/owner. Under these rules every Home with any
     // member also has roles/owner (bootstrap writes both atomically; invitations need roles),
     // so "no owner role" proves it was never initialised and no Owner can be displaced.
-    function adoptionTemplateVersion() { return 9; }   // == ROLE_TEMPLATE_VERSION (static test keeps them equal)
+    function adoptionTemplateVersion() { return 10; }   // == ROLE_TEMPLATE_VERSION (static test keeps them equal)
     function isUnadoptedCreator(h) {
       return signedIn() && exists(homeDoc(h))
         && get(homeDoc(h)).data.get('createdBy', '') == request.auth.uid
@@ -1153,6 +1153,61 @@ service cloud.firestore {
                  && (d.minMilli == null || (pnMilliOk(d.minMilli, d.dimension) && d.minMilli > 0)))
               : (d.trackMode == 'presence' && d.dimension == null && d.displayUnit == null && d.minMilli == null
                  && d.stockMilli == null && d.presence in [null, 'in', 'low', 'out']));
+    }
+
+    // ================================================================= V6.5 PANTRY stock (Phase 02) — mirrors stock-model.js
+    // One stock change = ONE batch: the product's stock branch (stockMilli | presence, stockRev + 1, stamp; rev unchanged) +
+    // the immutable movement homes/{h}/pantryMovements/{productId}_s{stockRev}. Each side re-checks the other (paired write):
+    // the product requires a movement that did not exist before and exists after; the movement requires the product
+    // before (get) and after (getAfter) with exactly one stock revision between them. Permissions: inventory.view AND
+    // inventory.edit (add / remove / presence) or inventory.adjust (correction). Owner: "*".
+    function pnMovPath(h, id) { return /databases/$(database)/documents/homes/$(h)/pantryMovements/$(id); }
+    function pnProdPath(h, id) { return /databases/$(database)/documents/homes/$(h)/pantryProducts/$(id); }
+    // Movement M ↔ product before B / after A: same product, next revision, active, catalog untouched, actor + server time,
+    // tracking mode / dimension unchanged, and the before / after values of the movement are exactly the product's.
+    function pnLinkOk(M, B, A, pid) {
+      return M.productId == pid && M.stockRev == A.stockRev && A.stockRev == B.stockRev + 1
+        && M.actorUid == request.auth.uid && M.at == request.time
+        && B.archived == false && A.archived == false && A.rev == B.rev
+        && A.trackMode == B.trackMode && A.dimension == B.dimension && M.dimension == B.dimension
+        && (B.trackMode == 'quantity'
+              ? (M.type in ['add', 'remove', 'correction'] && M.beforeMilli == B.stockMilli && M.afterMilli == A.stockMilli
+                 && M.deltaMilli == A.stockMilli - B.stockMilli && A.presence == null)
+              : (M.type == 'presence' && M.beforePresence == B.presence && M.afterPresence == A.presence && A.stockMilli == null));
+    }
+    // A movement's own content (D.2 + beforePresence / afterPresence / dimension / operationId). Future provenance fields are
+    // neutral (coveredMilli 0, the rest null) and no future type is accepted. firstCount: the product had no stock recorded.
+    function pnMovOk(M, firstCount) {
+      return M.operationId is string && M.operationId.matches('^[A-Za-z0-9_-]{16,64}$') && M.schemaVersion == 1
+        && M.ruleRev == null && M.segment == null && M.occFrom == null && M.occTo == null && M.coveredMilli == 0
+        && M.tripId == null && M.line == null && M.cookId == null
+        && (M.type == 'presence'
+              ? (M.beforeMilli == null && M.deltaMilli == null && M.afterMilli == null && M.requestedMilli == null && M.unfulfilledMilli == null
+                 && M.dimension == null && M.beforePresence in [null, 'in', 'low', 'out'] && M.afterPresence in ['in', 'low', 'out']
+                 && M.afterPresence != M.beforePresence && isOptionalText(M.note, 200))
+              : (M.beforePresence == null && M.afterPresence == null && M.dimension in ['count', 'mass', 'volume']
+                 && pnMilliOk(M.beforeMilli, M.dimension) && pnMilliOk(M.afterMilli, M.dimension) && M.deltaMilli is int
+                 && M.deltaMilli == M.afterMilli - M.beforeMilli && M.unfulfilledMilli == 0 && M.requestedMilli == math.abs(M.deltaMilli)
+                 && (M.type == 'add'
+                       ? (M.deltaMilli > 0 && M.deltaMilli <= 1000000000 && isOptionalText(M.note, 200))
+                       : (M.type == 'remove'
+                            ? (M.deltaMilli < 0 && M.deltaMilli >= -1000000000 && isOptionalText(M.note, 200))
+                            : (M.type == 'correction' && isName(M.note, 200) && (M.deltaMilli != 0 || firstCount))))));
+    }
+    function pnStockCan(h, M) {
+      return can(h, 'inventory', 'view') && can(h, 'inventory', M.type == 'correction' ? 'adjust' : 'edit');
+    }
+    // Product side of the pair. mp = the deterministic movement path for the NEW stockRev.
+    function pnStockWriteOk(h, pid, mp) {
+      return incoming().stockRev is int && incoming().stockRev == resource.data.stockRev + 1 && incoming().rev == resource.data.rev
+        && changed().hasOnly(['stockMilli', 'presence', 'stockRev', 'updatedBy', 'updatedAt'])
+        && stampedBy() && resource.data.archived == false && pnContentOk(incoming())
+        && !exists(mp) && existsAfter(mp)
+        && pnLinkOk(getAfter(mp).data, resource.data, incoming(), pid) && pnStockCan(h, getAfter(mp).data);
+    }
+    // Movement side of the pair. B / A = the product before / after this batch.
+    function pnMovCreateOk(h, M, B, A) {
+      return pnLinkOk(M, B, A, M.productId) && pnMovOk(M, B.stockRev == 0) && pnStockCan(h, M);
     }
 
     // ================================================================= V6.2 CALENDAR + MONTHLY BUDGET
@@ -2610,9 +2665,10 @@ service cloud.firestore {
         allow delete: if can(h, 'contacts', 'manageCategories');
       }
 
-      // =================================================== V6.5 PANTRY — product catalog (Phase 01; inventory.*)
-      // Catalog only: create / edit / archive. Stock fields are written once at creation and are immutable here
-      // (Phase 02 adds a separate, movement-proven stock branch with its own stockRev). No delete — archive.
+      // =================================================== V6.5 PANTRY — product catalog (Phase 01) + stock (Phase 02; inventory.*)
+      // Catalog: create / edit / archive (unchanged from Phase 01: stock fields are NOT in its masks, so a catalog write
+      // can never change stock). Stock: a SEPARATE branch of the update statement (below) — rev unchanged, stockRev + 1,
+      // proven by a movement in the same batch. The branches are disjoint (selected by stockRev). No delete — archive.
       match /pantryProducts/{productId} {
         allow get, list: if can(h, 'inventory', 'view');
         allow create: if productId.matches('^[A-Za-z0-9_-]{6,40}$')
@@ -2626,7 +2682,11 @@ service cloud.firestore {
           && can(h, 'inventory', 'create');
         // One revision per change (stale editors refused). trackMode is fixed; the dimension only while no stock was
         // ever recorded (stockRev == 0). Archive / restore = inventory.delete; an archived product is read-only.
-        allow update: if incoming().rev == resource.data.rev + 1 && stampedBy()
+        // Phase 02: ONE update statement, two disjoint branches selected by stockRev (only one branch is ever evaluated):
+        //   stockRev unchanged → the Phase 01 catalog / archive expression, VERBATIM (rev + 1; stock fields not in its masks);
+        //   otherwise          → the stock branch (pnStockWriteOk: rev unchanged, stockRev + 1, movement proven in the batch).
+        allow update: if incoming().stockRev == resource.data.stockRev
+          ? (incoming().rev == resource.data.rev + 1 && stampedBy()
           && ('archived' in changed()
             ? (changed().hasOnly(['archived', 'archivedAt', 'archivedBy', 'rev', 'updatedBy', 'updatedAt'])
                && (incoming().archived == true
@@ -2636,8 +2696,25 @@ service cloud.firestore {
             : (resource.data.archived == false
                && changed().hasOnly(['nameEn', 'nameAr', 'category', 'location', 'dimension', 'displayUnit', 'minMilli', 'aliases', 'note', 'rev', 'updatedBy', 'updatedAt'])
                && (!('dimension' in changed()) || resource.data.stockRev == 0)
-               && pnContentOk(incoming()) && can(h, 'inventory', 'edit')));
+               && pnContentOk(incoming()) && can(h, 'inventory', 'edit'))))
+          : pnStockWriteOk(h, productId, pnMovPath(h, productId + '_s' + string(incoming().stockRev)));
         allow delete: if false;
+      }
+
+      // =================================================== V6.5 PANTRY — stock movements (Phase 02; immutable audit)
+      // {productId}_s{stockRev}: created ONLY together with that product's stock branch (pnMovCreateOk); never updated or
+      // deleted, by anyone. History reads: inventory.view (bounded query productId ==, orderBy stockRev desc, limit 50).
+      match /pantryMovements/{movementId} {
+        allow get, list: if can(h, 'inventory', 'view');
+        allow create: if exactKeys(['productId', 'stockRev', 'type', 'beforeMilli', 'deltaMilli', 'afterMilli', 'requestedMilli', 'unfulfilledMilli', 'note',
+                                    'ruleRev', 'segment', 'occFrom', 'occTo', 'coveredMilli', 'tripId', 'line', 'cookId', 'actorUid', 'at', 'schemaVersion',
+                                    'beforePresence', 'afterPresence', 'dimension', 'operationId'])
+          && incoming().productId is string && incoming().productId.matches('^[A-Za-z0-9_-]{6,40}$')
+          && incoming().stockRev is int && incoming().stockRev >= 1
+          && movementId == incoming().productId + '_s' + string(incoming().stockRev)
+          && exists(pnProdPath(h, incoming().productId)) && existsAfter(pnProdPath(h, incoming().productId))
+          && pnMovCreateOk(h, incoming(), get(pnProdPath(h, incoming().productId)).data, getAfter(pnProdPath(h, incoming().productId)).data);
+        allow update, delete: if false;
       }
 
       // Future module collections (expenses, recipes, cleaning…) are added here, each

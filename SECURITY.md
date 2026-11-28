@@ -471,3 +471,49 @@ The URL checks are **syntactic and best-effort**. HomeHub has no server, proxy o
 - **Rules (`pantryProducts`):** active membership of the same Home via `can()`; exact keys; bounded strings, aliases and integers (≤ 10^12, whole pieces); zero / unrecorded stock and `stockRev == 0` at creation; stock fields in no update mask; `rev + 1` on every change (replay and stale edits refused); server timestamps and caller uid; archive transitions; no delete.
 - **No Finance link:** a static test forbids Finance imports and money / expense fields in the Pantry and Shopping folders.
 - Not in Phase 01: stock changes, movements, consumption rules, Shopping, Chef links. Offline: reads keep the open tab's in-memory snapshot; writes need a connection (Firestore memory cache only).
+
+## V6.5 Phase 02: Pantry stock foundation
+
+| Action | Permission | Owner | Admin | Member | Viewer | Child | Other Home |
+|---|---|---|---|---|---|---|---|
+| Read stock + recent history | `inventory.view` | ✓ | ✓ | ✓ | ✓ | ✗ (unless granted) | ✗ |
+| Add / remove / presence | `inventory.view` + `inventory.edit` | ✓ | ✓ | ✓ | ✗ | ✗ | ✗ |
+| Correction (absolute count, reason) | `inventory.view` + `inventory.adjust` | ✓ | ✓ (v10) | ✓ (v10) | ✗ | ✗ | ✗ |
+| Edit / delete a movement | none | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ |
+
+- **Role template v10 (additive, owner-triggered):** adds exactly `inventory.adjust` to admin and member (`ADDED_GRANTS`), never
+  re-adds another `inventory.*` default the owner removed, keeps custom grants, and is applied only through "Update default roles".
+  Homes whose roles are still at v9 have no correction for admins / members until the owner upgrades or grants `inventory.adjust`
+  by hand — the rules never fall back to `inventory.edit`.
+- **Paired write, checked from both sides:** product stock branch requires `!exists(movement) && existsAfter(movement)` at the
+  deterministic id and validates it against the product before / after (mode, dimension, revision, arithmetic, presence, type,
+  actor, server time); the movement create requires the product before (`get`) and after (`getAfter`) with exactly one stockRev
+  step, active, catalog / `rev` unchanged, exact keys, neutral future fields. Standalone writes, mixed metadata + stock, create +
+  stock, reuse of a pre-existing movement, two movements per revision, future types and forged stamps are refused.
+- **Concurrency:** deterministic id + `stockRev == stored + 1`; of two writers on the same revision only the first commits. The
+  client never rebases or retries automatically; an ambiguous failure is resolved by a server-confirmed read of the movement id
+  (`operationId` + actor + all values). **Limits:** rules cannot stop a member from intentionally submitting two distinct, valid
+  operations; `operationId` is client-generated and is not a global uniqueness guarantee.
+- **One product per batch is an application constraint, not a security invariant.** The client (`commitStock`) always
+  sends exactly one product update and one movement, which keeps outcomes and reconciliation simple. The rules do not
+  count products: they validate every product / movement pair independently, so a batch of several valid pairs is
+  allowed (bounded by Firestore's 20 document accesses per batch) and any invalid pair rejects the whole batch
+  (emulator test V65P02-7).
+- **Duplicate logical operations:** the client never submits an `operationId` twice (also across stores in a page and
+  for recorded operations), and an identical change on the same product within 2 minutes of a confirmed one needs an
+  explicit "record it again". Neither is a server guarantee: the rules cannot look up other movements by field, so two
+  distinct, valid operations by a member (or from two devices) are both accepted; only the deterministic id
+  `{productId}_s{stockRev}` is unique server-side.
+- **Uncertain operations survive the screen:** every submission is recorded *before* it is sent in a per-device registry
+  (`pending-ops.js`: memory + `localStorage` key `homehub.pantry.pendingStock.v1.{uid}.{homeId}`, every access guarded,
+  max 50, removed when resolved). After a Home switch, sign-out / sign-in, unmount or reload the operation is recovered
+  for that same user and Home, the product stays blocked, and it is resolved only by SERVER reads (automatically once
+  on the first server-confirmed snapshot, or "Check now") — never by a resend. The record holds the user's own pending
+  intent (product id, amounts, optional note) on that device until it is resolved. Limitation: a write still queued in
+  another open tab can make an early "not saved" verdict; the deterministic id + stockRev precondition keep data correct.
+- **Offline:** no persistence (memory cache only). Stock changes need a server-confirmed snapshot (not `fromCache`, product without
+  pending writes); `navigator.onLine` is never treated as confirmation. A write queued by the SDK after a drop may still land later:
+  it is shown as pending / unconfirmed, never as saved.
+- **Budgets:** ≤ 6 distinct document reads per stock batch (member, role, product before / after, movement before / after); rules
+  source 201,527 bytes (gate 245,000); exhaustive cost estimate: pantryProducts update 866, pantryMovements create 658 (max rule
+  still 1053). The real emulator remains authoritative.

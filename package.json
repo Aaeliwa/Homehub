@@ -1,6 +1,6 @@
 {
   "name": "homehub",
-  "version": "6.5.0-p01",
+  "version": "6.5.0-p02",
   "private": true,
   "description": "HomeHub V5. Foundation + Rooms + Devices + Finance + Family & Members (no build step: native ES modules).",
   "type": "module",

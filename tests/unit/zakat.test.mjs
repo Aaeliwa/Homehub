@@ -207,7 +207,8 @@ test('permissions: matrix + non-destructive v6 upgrade', () => {
   assert.deepEqual(m('owner'), A); assert.deepEqual(m('admin'), A);
   assert.deepEqual(m('member'), ['view', 'viewTotals', 'personal', 'transfer', 'prices', 'zakat']);
   assert.deepEqual(m('viewer'), ['view']); assert.deepEqual(m('child'), ['personal'], 'child: own savings only');
-  assert.equal(ROLE_TEMPLATE_VERSION, 9); assert.deepEqual(TEMPLATE_CHANGES[9], ['contacts']); assert.deepEqual(TEMPLATE_CHANGES[6], ['savings']); assert.deepEqual(TEMPLATE_CHANGES[7], ['expenses']); assert.deepEqual(TEMPLATE_CHANGES[8], ['calendar']);   // v8: V6.2
+  assert.equal(ROLE_TEMPLATE_VERSION, 10); assert.deepEqual(TEMPLATE_CHANGES[10], ['inventory']); assert.deepEqual(TEMPLATE_CHANGES[9], ['contacts']);   // v10: V6.5 P02 (+ inventory.adjust)
+  assert.deepEqual(TEMPLATE_CHANGES[6], ['savings']); assert.deepEqual(TEMPLATE_CHANGES[7], ['expenses']); assert.deepEqual(TEMPLATE_CHANGES[8], ['calendar']);   // v8: V6.2
   const up = upgradeRolePermissions({ current: ['custom.x', 'expenses.view', 'members.view', 'rooms.view'], template: defaultRoles().find((r) => r.id === 'member').permissions, from: 5 });
   for (const keep of ['custom.x', 'expenses.view', 'members.view', 'rooms.view', 'savings.personal']) assert.ok(up.includes(keep), keep);
 });

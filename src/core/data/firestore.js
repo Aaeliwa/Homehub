@@ -88,6 +88,44 @@ export async function readWhereLimited(segments, [field, op, value], max) {
 }
 
 /**
+ * V6.5 P02: BOUNDED live listener WITH snapshot metadata (includeMetadataChanges). onValue(docs, meta):
+ *   meta.fromCache        — the snapshot came from the local cache (not confirmed by the server)
+ *   meta.hasPendingWrites — the snapshot contains local writes the server has not acknowledged yet
+ *   meta.pendingIds       — ids of the documents with pending local writes
+ * Nothing here treats navigator.onLine as server confirmation. Existing helpers are unchanged.
+ */
+export function watchWhereLimitedMeta(segments, [field, op, value], max, onValue, onError) {
+  return sdk.onSnapshot(
+    sdk.query(colRef(segments), sdk.where(field, op, value), sdk.limit(max)),
+    { includeMetadataChanges: true },
+    (snap) => onValue(snap.docs.map((d) => ({ id: d.id, ...d.data(SNAP_OPTS) })), {
+      fromCache: !!(snap.metadata && snap.metadata.fromCache),
+      hasPendingWrites: !!(snap.metadata && snap.metadata.hasPendingWrites),
+      pendingIds: snap.docs.filter((d) => d.metadata && d.metadata.hasPendingWrites).map((d) => d.id),
+    }),
+    (err) => onError && onError(toAppError(err)),
+  );
+}
+/** V6.5 P02: one-shot BOUNDED, ORDERED read: one equality constraint + orderBy + limit (needs a composite index). */
+export async function readWhereOrderedLimited(segments, [field, op, value], [orderField, direction], max) {
+  try {
+    const snap = await sdk.getDocs(sdk.query(colRef(segments), sdk.where(field, op, value), sdk.orderBy(orderField, direction), sdk.limit(max)));
+    return snap.docs.map((d) => ({ id: d.id, ...d.data(SNAP_OPTS) }));
+  } catch (err) { throw toAppError(err); }
+}
+/**
+ * V6.5 P02: SERVER-CONFIRMED document read (getDocFromServer): never answered from the local cache; rejects when the
+ * server cannot be reached. Used to reconcile an ambiguous write (did MY movement land?).
+ */
+export async function readDocServer(segments) {
+  try {
+    return toPlain(await sdk.getDocFromServer(docRef(segments)));
+  } catch (err) {
+    throw toAppError(err);
+  }
+}
+
+/**
  * Live listener on a collection filtered by ONE equality/array-contains constraint
  * ([field, op, value]). Phase 4: needed so finance queries are provably within the rules
  * (rules are not filters). Single-field constraints need no composite index.

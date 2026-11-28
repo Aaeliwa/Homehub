@@ -20,6 +20,9 @@ export function doc(parent, ...parts) { const p = segs(parent, parts); const ins
 export function collection(parent, ...parts) { const p = segs(parent, parts); const inst = parent && parent.__inst; if (parent && '__used' in parent) parent.__used = true; if (!(p.length % 2)) throw new Error(`Invalid collection reference: ${p.join('/')}`); return { __path: p, __kind: 'col', path: p.join('/'), __inst: inst }; }
 export function where(field, op, value) { if (value === undefined) throw new Error(`Function where() called with invalid data. Unsupported field value: undefined`); return { field, op, value }; }
 export function query(col, ...c) { return { ...col, __kind: 'query', c }; }
+// V6.5 P02: ordered + limited queries (pantry history). Constraints are recorded only; rules are not evaluated here.
+export function orderBy(field, dir = 'asc') { return { orderBy: field, dir }; }
+export function limit(n) { return { limit: n }; }
 const snap = (r) => ({ exists: () => store.has(r.path), data: () => store.get(r.path), id: r.id });
 export async function getDoc(r) { if (r.__kind !== 'doc') throw new Error('getDoc needs a document reference'); return snap(r); }
 export async function getDocs(q) { const pre = q.path + '/'; return { docs: [...store.keys()].filter((k) => k.startsWith(pre) && !k.slice(pre.length).includes('/')).map((k) => ({ id: k.split('/').at(-1), data: () => store.get(k) })) }; }
