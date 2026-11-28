@@ -4444,8 +4444,12 @@ await check('V641-A Contacts UI: management actions ONLY in the ⋮ menus (list 
   await ctAct(page, '#ct-cats'); await page.locator('#ct-cats-back').waitFor(); await page.goBack(); await restored('categories → Back');
   await ctAct(page, '#ct-json'); await page.locator('#ct-json-view').waitFor(); await page.click('#ct-json-back'); await restored('JSON → Back to Contacts');
   // detail ⋮ menu: Edit / Export / Delete only there
-  await page.evaluate(() => window.scrollTo(0, 600)); await page.waitForTimeout(250); y0 = await page.evaluate(() => scrollY);
-  await page.locator('.ct-card:has-text("Filler 10") .ct-card__open').click(); await page.locator('#ct-detail').waitFor();
+  const deleteTarget = page.locator('.ct-card:has-text("Filler 10") .ct-card__open');
+  await deleteTarget.scrollIntoViewIfNeeded();
+  await page.waitForFunction(() => window.scrollY > 300);
+  y0 = await page.evaluate(() => scrollY);
+  assert.ok(y0 > 300, 'delete: nonzero scroll baseline');
+  await deleteTarget.click(); await page.locator('#ct-detail').waitFor();
   assert.deepEqual(await menuIds(page, 'ct-detail-menu'), ['ct-edit', 'ct-export-one', 'ct-delete']);
   for (const id of ['#ct-edit', '#ct-export-one', '#ct-delete']) assert.equal(await page.locator(id).isVisible(), false);
   const Ld = await page.evaluate(() => history.length);
