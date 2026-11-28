@@ -4453,12 +4453,6 @@ await check('V641-A Contacts UI: management actions ONLY in the ⋮ menus (list 
   assert.equal(await page.evaluate(() => history.length), Ld, 'editing adds no entry');
   assert.equal(await page.evaluate(() => !!(history.state && history.state.ctNav && history.state.ctNav.v === 'detail')), true, 'editing keeps the same details entry');
   await ctAct(page, '#ct-delete'); await page.click('dialog[open] .btn--danger'); shown -= 1;
-  console.log('CT_DELETE_SCROLL', JSON.stringify(await page.evaluate(() => ({
-    scrollY: window.scrollY,
-    maxY: document.documentElement.scrollHeight - innerHeight,
-    saved: history.state?.ctList,
-    cards: document.querySelectorAll('#ct-list .ct-card').length
-  }))));
   await restored('delete → one step back (list without the deleted contact)');
   // menu viewer inside details: Back closes the viewer first, then the details — still Contacts
   await page.goto(BASE + '#/'); await page.locator('.hero__home').waitFor();

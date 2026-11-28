@@ -3012,7 +3012,6 @@ test('V65P01-2 pantry create: inventory.create (owner / admin / member); viewer 
     [{ aliases: ['x'.repeat(41)] }, 'alias too long'], [{ aliases: [5] }, 'alias type'], [{ note: 'x'.repeat(201) }, 'note too long'], [{ trackMode: 'weight' }, 'track mode enum'],
   ];
   for (const [x, why] of bad) {
-    console.log('PANTRY_DENIAL_CHECK:', why);
     await assertDenied(setDoc(pnPath(db(OWNER_A), 'pnBad001'), pnDoc(OWNER_A, {}, x)), why);
   }
   await assertDenied(setDoc(pnPath(db(OWNER_A), 'pnBad002'), pnDoc(OWNER_A, { trackMode: 'presence' }, { stockMilli: 0 })), 'presence mode with numeric stock');
